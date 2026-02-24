@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — LinkedIn Helper{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Dashboard</h3>
+    <a href="{{ url_for('dashboard.upload') }}" class="btn btn-li">
+        <i class="bi bi-plus-lg me-1"></i>New Job
+    </a>
+</div>
+
+{% if not current_user.has_linkedin_session() %}
+<div class="alert alert-warning d-flex align-items-center" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
+    <div>
+        <strong>LinkedIn session not configured.</strong>
+        Go to <a href="{{ url_for('dashboard.settings') }}" class="alert-link">Settings</a> to paste your session JSON.
+    </div>
+</div>
+{% endif %}
+
+{% if jobs %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-task me-2"></i>Your Jobs</span>
+        <small class="text-muted">{{ jobs|length }} total</small>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Mode</th>
+                    <th>Profiles</th>
+                    <th>Progress</th>
+                    <th>Sent</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr>
+                    <td><a href="{{ url_for('dashboard.job_detail', job_id=job.id) }}">#{{ job.id }}</a></td>
+                    <td>
+                        {% if job.mode == 'connect' %}<i class="bi bi-person-plus me-1"></i>
+                        {% elif job.mode == 'message' %}<i class="bi bi-chat-dots me-1"></i>
+                        {% else %}<i class="bi bi-arrow-repeat me-1"></i>{% endif %}
+                        {{ job.mode|capitalize }}
+                    </td>
+                    <td>{{ job.total_profiles }}</td>
+                    <td style="min-width: 120px;">
+                        <div class="progress">
+                            {% set pct = (job.processed / job.total_profiles * 100) if job.total_profiles else 0 %}
+                            <div class="progress-bar" style="width: {{ pct|round }}%"></div>
+                        </div>
+                        <small class="text-muted">{{ job.processed }}/{{ job.total_profiles }}</small>
+                    </td>
+                    <td><span class="text-success fw-bold">{{ job.sent }}</span></td>
+                    <td><span class="status-badge status-{{ job.status }}">{{ job.status }}</span></td>
+                    <td><small class="text-muted">{{ job.created_at.strftime('%b %d, %H:%M') if job.created_at else '' }}</small></td>
+                    <td>
+                        <a href="{{ url_for('dashboard.job_detail', job_id=job.id) }}" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <i class="bi bi-inbox"></i>
+        <h5>No jobs yet</h5>
+        <p>Upload a CSV with LinkedIn profile URLs to get started.</p>
+        <a href="{{ url_for('dashboard.upload') }}" class="btn btn-li mt-2">
+            <i class="bi bi-upload me-1"></i>Upload CSV
+        </a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

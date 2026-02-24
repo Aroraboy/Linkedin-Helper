@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+state.json
+progress.db*
+logs/
+web_app.db
+instance/
+*.db-shm
+*.db-wal
+.pytest_cache/

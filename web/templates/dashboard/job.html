@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Job #{{ job.id }} — LinkedIn Helper{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <a href="{{ url_for('dashboard.index') }}" class="text-muted text-decoration-none">
+            <i class="bi bi-arrow-left me-1"></i>Dashboard
+        </a>
+        <h3 class="mt-2 mb-0">
+            Job #{{ job.id }}
+            <span class="status-badge status-{{ job.status }} ms-2">{{ job.status }}</span>
+        </h3>
+        <small class="text-muted">
+            {{ job.mode|capitalize }} • {{ job.total_profiles }} profiles
+            {% if job.csv_filename %}• {{ job.csv_filename }}{% endif %}
+        </small>
+    </div>
+    <div class="d-flex gap-2">
+        {% if job.status in ('pending', 'completed', 'failed', 'cancelled') %}
+        <form method="POST" action="{{ url_for('dashboard.start', job_id=job.id) }}">
+            <button class="btn btn-li">
+                <i class="bi bi-play-fill me-1"></i>
+                {% if job.status == 'pending' %}Start{% else %}Re-run{% endif %}
+            </button>
+        </form>
+        {% endif %}
+        {% if job.status == 'running' %}
+        <form method="POST" action="{{ url_for('dashboard.cancel', job_id=job.id) }}">
+            <button class="btn btn-outline-danger">
+                <i class="bi bi-stop-fill me-1"></i>Cancel
+            </button>
+        </form>
+        {% endif %}
+        <a href="{{ url_for('dashboard.export_job', job_id=job.id) }}" class="btn btn-outline-secondary">
+            <i class="bi bi-download me-1"></i>Export CSV
+        </a>
+        {% if job.status != 'running' %}
+        <form method="POST" action="{{ url_for('dashboard.delete_job', job_id=job.id) }}"
+              onsubmit="return confirm('Delete this job and all its data?')">
+            <button class="btn btn-outline-danger btn-sm">
+                <i class="bi bi-trash"></i>
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Stats Row -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="number text-info" id="stat-processed">{{ job.processed }}</div>
+            <div class="label">Processed</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="number text-success" id="stat-sent">{{ job.sent }}</div>
+            <div class="label">Sent</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="number text-warning" id="stat-skipped">{{ job.skipped }}</div>
+            <div class="label">Skipped</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="number text-danger" id="stat-errors">{{ job.errors }}</div>
+            <div class="label">Errors</div>
+        </div>
+    </div>
+</div>
+
+<!-- Progress Bar -->
+<div class="card mb-4 p-3">
+    <div class="d-flex justify-content-between mb-2">
+        <span class="text-muted" id="progress-label">{{ job.processed }}/{{ job.total_profiles }} profiles</span>
+        <span class="text-muted" id="progress-pct">
+            {{ ((job.processed / job.total_profiles * 100) if job.total_profiles else 0)|round }}%
+        </span>
+    </div>
+    <div class="progress">
+        {% set pct = (job.processed / job.total_profiles * 100) if job.total_profiles else 0 %}
+        <div class="progress-bar" id="progress-bar" style="width: {{ pct|round }}%"></div>
+    </div>
+    <div class="live-status mt-3" id="live-status">{{ job.live_status }}</div>
+</div>
+
+<!-- Profiles Table -->
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-people me-2"></i>Profiles
+    </div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>URL</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in profiles %}
+                <tr>
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td>
+                        <a href="{{ p.url }}" target="_blank" rel="noopener" style="word-break: break-all;">
+                            {{ p.url | replace('https://www.linkedin.com/in/', '') | truncate(30) }}
+                            <i class="bi bi-box-arrow-up-right ms-1" style="font-size:0.7rem;"></i>
+                        </a>
+                    </td>
+                    <td>{{ p.name or '—' }}</td>
+                    <td><span class="status-badge status-{{ p.status }}">{{ p.status }}</span></td>
+                    <td><small class="text-danger">{{ p.error_msg or '' }}</small></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if job.status in ('running', 'pending') %}
+<script>
+// Poll for progress updates every 2 seconds
+const jobId = {{ job.id }};
+let polling = setInterval(async () => {
+    try {
+        const res = await fetch(`/job/${jobId}/progress`);
+        const data = await res.json();
+
+        document.getElementById('stat-processed').textContent = data.processed;
+        document.getElementById('stat-sent').textContent = data.sent;
+        document.getElementById('stat-skipped').textContent = data.skipped;
+        document.getElementById('stat-errors').textContent = data.errors;
+        document.getElementById('progress-bar').style.width = data.percent + '%';
+        document.getElementById('progress-pct').textContent = data.percent + '%';
+        document.getElementById('progress-label').textContent = `${data.processed}/${data.total} profiles`;
+        document.getElementById('live-status').textContent = data.live_status;
+
+        // Update page status badge
+        if (data.status !== 'running' && data.status !== 'pending') {
+            clearInterval(polling);
+            // Reload to show final state + updated profile statuses
+            setTimeout(() => location.reload(), 1000);
+        }
+    } catch (e) {
+        console.error('Polling error:', e);
+    }
+}, 2000);
+</script>
+{% endif %}
+{% endblock %}

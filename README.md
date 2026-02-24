@@ -1,6 +1,6 @@
 # LinkedIn Auto-Connect & Message Tool
 
-> **Python CLI tool** that reads LinkedIn profile URLs from a spreadsheet (CSV/XLSX/Google Sheets), sends personalized connection requests, and follows up with a message once accepted — all via Playwright browser automation.
+> **Python tool** (CLI + Web UI) that reads LinkedIn profile URLs from a spreadsheet (CSV/XLSX/Google Sheets), sends personalized connection requests, and follows up with a message once accepted — all via Playwright browser automation.
 
 > **Disclaimer:** LinkedIn's Terms of Service prohibit automated interactions. Using this tool carries risk of account restriction or ban. Built-in safety measures (rate limiting, human-like delays, headful browser) reduce but do not eliminate that risk. Use at your own discretion.
 
@@ -8,15 +8,16 @@
 
 ## Tech Stack
 
-| Component       | Technology                     |
-| --------------- | ------------------------------ |
-| Language        | Python 3.10+                   |
-| Browser Engine  | Playwright (Chromium, headful) |
-| Spreadsheet I/O | `openpyxl`, `csv`, `gspread`   |
-| Database        | SQLite                         |
-| Config          | `.env` + `python-dotenv`       |
-| CLI             | `argparse` + `rich`            |
-| Console UI      | `rich` (progress bars, tables) |
+| Component       | Technology                          |
+| --------------- | ----------------------------------- |
+| Language        | Python 3.10+                        |
+| Browser Engine  | Playwright (Chromium, headful)      |
+| Spreadsheet I/O | `openpyxl`, `csv`, `gspread`        |
+| Database        | SQLite                              |
+| Config          | `.env` + `python-dotenv`            |
+| CLI             | `argparse` + `rich`                 |
+| Web UI          | Flask + Bootstrap 5 (dark theme)    |
+| Auth            | Flask-Login + Flask-WTF             |
 
 ---
 
@@ -24,17 +25,36 @@
 
 ```
 Linkedin-help/
+├── app.py                   # Flask web app entry point
 ├── main.py                  # CLI entry point
 ├── config.py                # Settings, delays, caps, template paths
 ├── spreadsheet_reader.py    # Unified CSV / XLSX / Google Sheets reader
 ├── linkedin_bot.py          # Playwright automation (login, connect, message)
-├── db.py                    # SQLite persistence & progress tracking
+├── db.py                    # SQLite persistence & progress tracking (CLI)
 ├── console.py               # Rich console UI (progress bars, tables, colors)
 ├── logger.py                # File logging to logs/run_YYYY-MM-DD.log
 ├── requirements.txt         # Python dependencies
+├── Dockerfile               # Docker deployment
+├── Procfile                 # Railway / Render deployment
 ├── .env                     # LinkedIn credentials (GIT-IGNORED)
-├── .gitignore
-├── README.md
+├── web/
+│   ├── __init__.py
+│   ├── models.py            # SQLAlchemy models (User, Job, JobProfile)
+│   ├── forms.py             # WTForms for auth & settings
+│   ├── auth.py              # Register / Login / Logout blueprint
+│   ├── dashboard.py         # Dashboard, upload, job management blueprint
+│   ├── worker.py            # Background bot worker (threaded)
+│   ├── templates/
+│   │   ├── base.html        # Dark-themed Bootstrap layout
+│   │   ├── auth/
+│   │   │   ├── login.html
+│   │   │   └── register.html
+│   │   └── dashboard/
+│   │       ├── index.html   # Job list dashboard
+│   │       ├── upload.html  # CSV upload + mode selection
+│   │       ├── job.html     # Job detail + live progress
+│   │       └── settings.html # Templates + LinkedIn session
+│   └── static/
 ├── templates/
 │   ├── connection_note.txt  # Template for connection request note
 │   └── followup_message.txt # Template for follow-up message
@@ -47,6 +67,66 @@ Linkedin-help/
     ├── test_main.py         # Unit tests for CLI & export
     └── sample_urls.csv      # Sample data for testing
 ```
+
+---
+
+## Web UI (Multi-User)
+
+The tool includes a full web interface for multi-user deployment.
+
+### Quick Start (Local)
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+python -m playwright install chromium
+
+# Run the web app
+python app.py
+# → Open http://localhost:5000
+```
+
+### Quick Start (Docker)
+
+```bash
+docker build -t linkedin-helper .
+docker run -p 5000:5000 -e SECRET_KEY=your-secret-key linkedin-helper
+```
+
+### Deploy to Railway / Render
+
+1. Push to GitHub
+2. Connect your repo on [Railway](https://railway.app) or [Render](https://render.com)
+3. Set environment variable: `SECRET_KEY=<random-string>`
+4. Deploy — the Dockerfile handles everything
+
+### Web UI Features
+
+| Feature | Description |
+|---------|-------------|
+| **User Accounts** | Register/login — each user has isolated data |
+| **CSV Upload** | Upload a CSV with LinkedIn URLs |
+| **Job Modes** | Connect, Message, or Both |
+| **Live Progress** | Real-time progress bar + status updates |
+| **LinkedIn Session** | Paste your `state.json` in Settings |
+| **Custom Templates** | Edit connection note & follow-up message per user |
+| **Export Results** | Download job results as CSV |
+| **Cancel Jobs** | Stop a running job anytime |
+
+### How It Works
+
+1. **Register** an account on the web UI
+2. Go to **Settings** → paste your LinkedIn `state.json` session
+3. Customize your **connection note** and **follow-up message** templates
+4. Go to **New Job** → upload a CSV → choose mode → Create
+5. Click **Start** — watch live progress as profiles are processed
+6. **Export** results when done
+
+---
+
+## CLI Usage
+
+The original CLI is still available for direct use:
 
 ---
 

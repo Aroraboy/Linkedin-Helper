@@ -468,20 +468,22 @@ class LinkedInBot:
 
     # ─── Connection Requests ─────────────────────────────────────────────────
 
-    def send_connection_request(self, url: str, note_template: Optional[str] = None) -> str:
+    def send_connection_request(self, url: str, note_template: Optional[str] = None, send_note: bool = True) -> str:
         """
-        Visit a profile and send a connection request with a personalized note.
+        Visit a profile and send a connection request.
 
         Args:
             url: LinkedIn profile URL.
             note_template: Message template with {first_name} placeholder.
                           If None, loads from templates/connection_note.txt.
+            send_note: If True, send with a personalized note.
+                      If False, send without a note ("Send without a note").
 
         Returns:
             Status string: "request_sent", "already_pending", "already_connected",
                           "skipped", "error", "cap_reached"
         """
-        if note_template is None:
+        if send_note and note_template is None:
             note_template = get_connection_note_template()
 
         try:
@@ -525,15 +527,18 @@ class LinkedInBot:
 
             self.action_delay()
 
-            # Step 4: Handle the connection modal (add note + send)
-            personalized_note = note_template.format(first_name=first_name)
+            # Step 4: Handle the connection modal
+            if send_note and note_template:
+                personalized_note = note_template.format(first_name=first_name)
+                # LinkedIn limits notes to 300 characters
+                if len(personalized_note) > 300:
+                    personalized_note = personalized_note[:297] + "..."
+                    print(f"[BOT]   Note truncated to 300 chars")
+                sent = self._handle_connection_modal(personalized_note)
+            else:
+                # Send without a note (Codegen-proven flow)
+                sent = self._send_without_note()
 
-            # LinkedIn limits notes to 300 characters
-            if len(personalized_note) > 300:
-                personalized_note = personalized_note[:297] + "..."
-                print(f"[BOT]   Note truncated to 300 chars")
-
-            sent = self._handle_connection_modal(personalized_note)
             if sent:
                 print(f"[BOT]   Connection request sent!")
                 return STATUS_REQUEST_SENT
@@ -548,6 +553,84 @@ class LinkedInBot:
         except Exception as e:
             print(f"[BOT]   Error sending connection request: {e}")
             return STATUS_ERROR
+
+    def _send_without_note(self) -> bool:
+        """
+        Click 'Send without a note' in the connection modal.
+
+        Exact selector from Playwright Codegen:
+            page.get_by_role("button", name="Send without a note").click()
+
+        Returns:
+            True if successfully clicked, False otherwise.
+        """
+        page = self.page
+        self._random_delay((1, 3))
+
+        # Check for LinkedIn's weekly cap warning first
+        try:
+            cap_warning = page.query_selector(
+                'div:has-text("You\'ve reached the weekly invitation limit"), '
+                'div:has-text("weekly invitation limit")'
+            )
+            if cap_warning and cap_warning.is_visible():
+                raise LinkedInCapReachedError("Weekly invitation limit reached")
+        except LinkedInCapReachedError:
+            raise
+        except Exception:
+            pass
+
+        # Primary: use get_by_role from Codegen
+        try:
+            send_btn = page.get_by_role("button", name="Send without a note")
+            if send_btn.is_visible():
+                print("[BOT]   Clicking 'Send without a note'")
+                send_btn.click()
+                self._random_delay((1, 3))
+                # Verify modal closed
+                try:
+                    page.wait_for_selector(
+                        '.artdeco-modal, [role="dialog"]',
+                        state='hidden',
+                        timeout=5000,
+                    )
+                except Exception:
+                    pass
+                return True
+        except Exception as e:
+            print(f"[BOT]   'Send without a note' button not found: {e}")
+
+        # Fallback: try CSS selectors
+        fallback_selectors = [
+            'button[aria-label="Send without a note"]',
+            'button:has-text("Send without a note")',
+            '.artdeco-modal button.artdeco-button--secondary',
+        ]
+        for sel in fallback_selectors:
+            try:
+                btn = page.query_selector(sel)
+                if btn and btn.is_visible():
+                    text = btn.inner_text().strip()
+                    print(f"[BOT]   Clicking fallback send button: '{text}'")
+                    btn.click()
+                    self._random_delay((1, 3))
+                    return True
+            except Exception:
+                continue
+
+        # Last resort: try "Send invitation" (some modals only show this)
+        try:
+            send_inv = page.get_by_role("button", name="Send invitation")
+            if send_inv.is_visible():
+                print("[BOT]   Falling back to 'Send invitation'")
+                send_inv.click()
+                self._random_delay((1, 3))
+                return True
+        except Exception:
+            pass
+
+        print("[BOT]   Could not find any send button")
+        return False
 
     def _detect_connection_state(self, name: str = "") -> str:
         """

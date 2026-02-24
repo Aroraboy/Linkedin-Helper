@@ -1,0 +1,11 @@
+[build]
+builder = "heroku/builder:24"
+
+[build.env]
+PLAYWRIGHT_BROWSERS_PATH = "/app/.playwright"
+
+[[stacks]]
+id = "*"
+
+[processes]
+web = "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4 --timeout 300 'app:create_app()'"

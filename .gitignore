@@ -6,6 +6,9 @@ state.json
 
 # Database
 *.db
+*.db-shm
+*.db-wal
+instance/
 
 # Python
 __pycache__/

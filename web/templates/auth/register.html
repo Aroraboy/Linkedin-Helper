@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Register — LinkedIn Helper{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5 col-lg-4">
+        <div class="card">
+            <div class="card-header text-center py-3">
+                <i class="bi bi-linkedin" style="font-size:2rem; color: #0a66c2;"></i>
+                <h4 class="mt-2 mb-0">Create Account</h4>
+                <small class="text-muted">Get started with LinkedIn Helper</small>
+            </div>
+            <div class="card-body p-4">
+                <form method="POST">
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        {{ form.username(class="form-control", placeholder="johndoe") }}
+                        {% for error in form.username.errors %}
+                            <small class="text-danger">{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        {{ form.email(class="form-control", placeholder="you@example.com") }}
+                        {% for error in form.email.errors %}
+                            <small class="text-danger">{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        {{ form.password(class="form-control", placeholder="Min 6 characters") }}
+                        {% for error in form.password.errors %}
+                            <small class="text-danger">{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirm Password</label>
+                        {{ form.confirm(class="form-control", placeholder="Re-enter password") }}
+                        {% for error in form.confirm.errors %}
+                            <small class="text-danger">{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                    <button type="submit" class="btn btn-li w-100 py-2 mt-2">
+                        <i class="bi bi-person-plus me-2"></i>Create Account
+                    </button>
+                </form>
+                <hr class="my-4" style="border-color: #30363d;">
+                <p class="text-center text-muted mb-0">
+                    Already have an account? <a href="{{ url_for('auth.login') }}">Sign in</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
