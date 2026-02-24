@@ -37,6 +37,9 @@ COPY . .
 # Create a data directory for the SQLite DB
 RUN mkdir -p /app/data
 
+# Increase shared memory for Chromium (prevents "Page crashed" in containers)
+RUN mkdir -p /dev/shm && chmod 1777 /dev/shm
+
 # Environment — do NOT set PORT; Railway injects it dynamically
 ENV SECRET_KEY=change-me-in-production
 ENV DATABASE_URL=sqlite:////app/data/web_app.db

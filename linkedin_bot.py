@@ -109,7 +109,7 @@ class LinkedInBot:
         print("[BOT] Launching browser...")
         self._playwright = sync_playwright().start()
 
-        # Launch Chromium with anti-detection args
+        # Launch Chromium with anti-detection args + Docker-safe flags
         self._browser = self._playwright.chromium.launch(
             headless=self.headless,
             args=[
@@ -117,6 +117,13 @@ class LinkedInBot:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-infobars",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--no-first-run",
+                "--single-process",
                 "--window-size=1280,800",
             ],
         )
