@@ -8,6 +8,7 @@ Handles:
     4. Session extraction (storage_state JSON)
 """
 
+import base64
 import json
 import time
 import traceback
@@ -59,6 +60,10 @@ def login_to_linkedin(email: str, password: str) -> dict:
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--no-zygote",
+                "--disable-setuid-sandbox",
             ],
         )
         context = browser.new_context(
@@ -114,6 +119,19 @@ def login_to_linkedin(email: str, password: str) -> dict:
             or "challenge" in current_url
             or "two-step-verification" in current_url
         ):
+            # Capture what LinkedIn is actually showing
+            page_text = ""
+            screenshot_b64 = ""
+            try:
+                page_text = page.inner_text("body")[:500]
+                screenshot_bytes = page.screenshot()
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            except Exception:
+                pass
+
+            print(f"[AUTH] Challenge page detected: {current_url}")
+            print(f"[AUTH] Page text: {page_text[:200]}")
+
             # Save the intermediate state so we can continue after code entry
             intermediate_state = json.dumps(context.storage_state(), indent=2)
             return {
@@ -122,6 +140,8 @@ def login_to_linkedin(email: str, password: str) -> dict:
                 "session_json": None,
                 "intermediate_state": intermediate_state,
                 "verification_url": current_url,
+                "page_text": page_text,
+                "screenshot_b64": screenshot_b64,
                 "error": None,
             }
 
@@ -197,6 +217,10 @@ def submit_verification_code(intermediate_state: str, code: str) -> dict:
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--no-zygote",
+                "--disable-setuid-sandbox",
             ],
         )
         context = browser.new_context(

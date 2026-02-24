@@ -302,8 +302,13 @@ def linkedin_login():
         if result["needs_verification"]:
             # Store intermediate state in Flask session for the verify step
             flask_session["li_intermediate_state"] = result.get("intermediate_state")
+            # Store screenshot so user can see what LinkedIn is showing
+            if result.get("screenshot_b64"):
+                flask_session["li_screenshot"] = result["screenshot_b64"]
+            page_text = result.get("page_text", "")
             flash(
-                "LinkedIn requires a verification code. Check your email/phone and enter it below.",
+                f"LinkedIn requires verification. Check your email/phone for a code. "
+                f"Page says: {page_text[:200]}",
                 "warning",
             )
             return redirect(url_for("dashboard.settings", verify=1))
