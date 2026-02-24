@@ -52,7 +52,10 @@ def create_app():
     # ─── Blueprints ───────────────────────────────────────────────────────
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
-
+    # ─── Health check (for Railway / load balancers) ─────────────────
+    @app.route("/health")
+    def health():
+        return "ok", 200
     # ─── Root redirect ────────────────────────────────────────────────────
     @app.route("/")
     def root():
