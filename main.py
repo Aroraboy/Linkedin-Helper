@@ -2,21 +2,27 @@
 main.py — CLI entry point for the LinkedIn Auto-Connect & Message Tool.
 
 Usage:
-    python main.py --file urls.xlsx --mode connect
-    python main.py --file urls.xlsx --mode message
-    python main.py --file urls.xlsx --mode both
-    python main.py --file urls.csv --mode connect --dry-run
-    python main.py --status
+    python main.py --file urls.xlsx --mode connect           Send connection requests
+    python main.py --file urls.xlsx --mode message           Send follow-up messages
+    python main.py --file urls.xlsx --mode both              Connect then message
+    python main.py --file urls.csv --mode connect --dry-run  Simulate without clicking
+    python main.py --status                                  Show progress dashboard
+    python main.py --reset-errors                            Retry failed profiles
+    python main.py --export results.csv                      Export all profiles to CSV
 """
 
 import argparse
+import csv
+import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from config import (
     DAILY_CONNECTION_CAP,
     DAILY_MESSAGE_CAP,
+    DELAY_BETWEEN_PROFILES,
     STATUS_CONNECTED,
     STATUS_ERROR,
     STATUS_MESSAGED,
@@ -26,12 +32,51 @@ from config import (
     get_connection_note_template,
     get_followup_message_template,
 )
+from console import (
+    console,
+    create_progress,
+    print_banner,
+    print_cap,
+    print_dashboard,
+    print_db_summary,
+    print_error,
+    print_export_success,
+    print_info,
+    print_profile_header,
+    print_session_summary,
+    print_skip,
+    print_success,
+)
 from db import COUNTER_CONNECTIONS, COUNTER_MESSAGES, Database
 from linkedin_bot import LinkedInBot, LinkedInCapReachedError, SessionExpiredError
+from logger import setup_logging
 from spreadsheet_reader import read_spreadsheet
 
+# ─── Global state for graceful shutdown ──────────────────────────────────────
 
-def run_connect(file_path: str, dry_run: bool = False, cap: int = 0):
+_interrupted = False
+_bot_ref: LinkedInBot | None = None
+_db_ref: Database | None = None
+
+
+def _signal_handler(sig, frame):
+    """Handle Ctrl+C gracefully — set flag so the main loop exits cleanly."""
+    global _interrupted
+    _interrupted = True
+    console.print("\n\n  [warning]⚠ Ctrl+C detected — finishing current profile then stopping...[/warning]")
+
+
+signal.signal(signal.SIGINT, _signal_handler)
+
+
+# ─── Connect Workflow ────────────────────────────────────────────────────────
+
+def run_connect(
+    file_path: str,
+    dry_run: bool = False,
+    cap: int = 0,
+    delay_override: float = 0,
+):
     """
     Run the connection request workflow.
 
@@ -42,29 +87,38 @@ def run_connect(file_path: str, dry_run: bool = False, cap: int = 0):
         file_path: Path to CSV/XLSX/Google Sheets URL with LinkedIn profile URLs.
         dry_run: If True, visit profiles but don't click any buttons.
         cap: Override daily connection cap. 0 = use default from config.
+        delay_override: Override minimum delay between profiles. 0 = use default.
     """
+    global _interrupted, _bot_ref, _db_ref
+    _interrupted = False
+
+    logger = setup_logging()
     daily_cap = cap if cap > 0 else DAILY_CONNECTION_CAP
 
-    # Step 1: Read spreadsheet and import URLs
-    print(f"\n{'='*60}")
-    print(f"  LinkedIn Auto-Connect Tool {'(DRY RUN)' if dry_run else ''}")
-    print(f"{'='*60}\n")
+    print_banner("LinkedIn Auto-Connect Tool", dry_run=dry_run)
+    logger.info(f"Connect mode started | file={file_path} | dry_run={dry_run} | cap={daily_cap}")
 
+    # Step 1: Read spreadsheet and import URLs
     urls = read_spreadsheet(file_path)
     if not urls:
-        print("[ERROR] No valid LinkedIn URLs found in the file.")
+        print_error("No valid LinkedIn URLs found in the file.")
+        logger.error("No valid LinkedIn URLs found.")
         return
 
     db = Database()
+    _db_ref = db
     import_result = db.import_urls(urls)
-    print(f"[DB] Imported {import_result['imported']} new URLs, "
-          f"skipped {import_result['skipped']} duplicates.\n")
+    print_info(
+        f"Imported {import_result['imported']} new URLs, "
+        f"skipped {import_result['skipped']} duplicates."
+    )
+    logger.info(f"Imported {import_result['imported']}, skipped {import_result['skipped']}")
 
     # Step 2: Check daily cap
     if db.is_daily_cap_reached(COUNTER_CONNECTIONS):
         today_count = db.get_daily_count(COUNTER_CONNECTIONS)
-        print(f"[CAP] Daily connection cap reached ({today_count}/{daily_cap}). "
-              f"Try again tomorrow.")
+        print_cap(f"Daily connection cap reached ({today_count}/{daily_cap}). Try again tomorrow.")
+        logger.warning(f"Daily cap reached: {today_count}/{daily_cap}")
         db.close()
         return
 
@@ -73,25 +127,34 @@ def run_connect(file_path: str, dry_run: bool = False, cap: int = 0):
     pending = db.get_pending_profiles(limit=remaining_today)
 
     if not pending:
-        print("[INFO] No pending profiles to process.")
+        print_info("No pending profiles to process.")
         summary = db.get_summary()
-        print(f"[INFO] Summary: {summary}")
+        print_db_summary(summary)
         db.close()
         return
 
-    print(f"[INFO] Processing {len(pending)} profiles (daily cap: {daily_cap}, "
-          f"remaining: {remaining_today})\n")
+    print_info(
+        f"Processing {len(pending)} profiles "
+        f"(daily cap: {daily_cap}, remaining: {remaining_today})"
+    )
 
     # Step 4: Load template
     try:
         note_template = get_connection_note_template()
     except FileNotFoundError as e:
-        print(f"[ERROR] {e}")
+        print_error(str(e))
         db.close()
         return
 
     # Step 5: Launch browser and start processing
     bot = LinkedInBot()
+    _bot_ref = bot
+
+    # Stats for this session
+    processed = 0
+    sent = 0
+    skipped = 0
+    errors = 0
 
     try:
         logged_in = bot.start()
@@ -99,132 +162,143 @@ def run_connect(file_path: str, dry_run: bool = False, cap: int = 0):
         if not logged_in:
             bot.login()
             if not bot.is_logged_in():
-                print("[ERROR] Login failed. Please try again.")
+                print_error("Login failed. Please try again.")
                 bot.close()
                 db.close()
                 return
 
-        # Stats for this session
-        processed = 0
-        sent = 0
-        skipped = 0
-        errors = 0
+        logger.info(f"Browser launched, logged in. Processing {len(pending)} profiles.")
 
-        for i, profile in enumerate(pending):
-            url = profile["url"]
-            print(f"\n[{i+1}/{len(pending)}] {url}")
+        with create_progress() as progress:
+            task = progress.add_task("Connecting...", total=len(pending))
 
-            # Check daily cap before each profile
-            if db.is_daily_cap_reached(COUNTER_CONNECTIONS):
-                print(f"\n[CAP] Daily connection cap reached ({daily_cap}). Stopping.")
-                break
+            for i, profile in enumerate(pending):
+                if _interrupted:
+                    logger.info("Interrupted by user (Ctrl+C)")
+                    break
 
-            try:
-                if dry_run:
-                    status = bot.dry_run_connection(url, note_template)
-                else:
-                    status = bot.send_connection_request(url, note_template)
+                url = profile["url"]
 
-                # Update DB based on result
-                if status == STATUS_REQUEST_SENT:
+                # Check daily cap before each profile
+                if db.is_daily_cap_reached(COUNTER_CONNECTIONS):
+                    print_cap(f"Daily connection cap reached ({daily_cap}). Stopping.")
+                    logger.warning("Daily cap reached mid-run")
+                    break
+
+                # Update progress bar description
+                progress.update(task, description=f"[{i+1}/{len(pending)}] {url[-40:]}...")
+
+                try:
+                    if dry_run:
+                        status = bot.dry_run_connection(url, note_template)
+                    else:
+                        status = bot.send_connection_request(url, note_template)
+
+                    # Extract name for logging
                     name_info = None
                     try:
-                        # Name was already printed, extract from page
                         name_el = bot.page.query_selector("h1")
                         if name_el:
                             name_info = name_el.inner_text().strip()
                     except Exception:
                         pass
 
-                    if not dry_run:
-                        db.update_status(url, STATUS_REQUEST_SENT, name=name_info)
-                        db.increment_daily_counter(COUNTER_CONNECTIONS)
-                    sent += 1
-                    print(f"[BOT]   ✓ Request sent")
+                    if status == STATUS_REQUEST_SENT:
+                        if not dry_run:
+                            db.update_status(url, STATUS_REQUEST_SENT, name=name_info)
+                            db.increment_daily_counter(COUNTER_CONNECTIONS)
+                        sent += 1
+                        logger.info(f"REQUEST_SENT | {url} | {name_info or 'N/A'}")
 
-                elif status == "already_connected":
-                    if not dry_run:
-                        db.update_status(url, "connected", name=name_info if 'name_info' in dir() else None)
-                    print(f"[BOT]   ○ Already connected")
-                    skipped += 1
+                    elif status == "already_connected":
+                        if not dry_run:
+                            db.update_status(url, STATUS_CONNECTED, name=name_info)
+                        skipped += 1
+                        logger.info(f"ALREADY_CONNECTED | {url}")
 
-                elif status == "already_pending":
-                    if not dry_run:
-                        db.update_status(url, STATUS_REQUEST_SENT)
-                    print(f"[BOT]   ○ Already pending")
-                    skipped += 1
+                    elif status == "already_pending":
+                        if not dry_run:
+                            db.update_status(url, STATUS_REQUEST_SENT)
+                        skipped += 1
+                        logger.info(f"ALREADY_PENDING | {url}")
 
-                elif status == STATUS_SKIPPED:
-                    if not dry_run:
-                        db.update_status(url, STATUS_SKIPPED)
-                    print(f"[BOT]   ○ Skipped (no Connect button)")
-                    skipped += 1
+                    elif status == STATUS_SKIPPED:
+                        if not dry_run:
+                            db.update_status(url, STATUS_SKIPPED)
+                        skipped += 1
+                        logger.info(f"SKIPPED | {url}")
 
-                elif status == "cap_reached":
-                    print(f"\n[CAP] LinkedIn weekly invitation limit reached!")
-                    if not dry_run:
-                        db.update_status(url, STATUS_PENDING)  # Keep as pending for retry
-                    break
+                    elif status == "cap_reached":
+                        logger.warning(f"LINKEDIN_CAP_REACHED | {url}")
+                        if not dry_run:
+                            db.update_status(url, STATUS_PENDING)
+                        break
 
-                else:  # error
+                    else:
+                        if not dry_run:
+                            db.update_status(url, STATUS_ERROR, error_msg=f"Status: {status}")
+                        errors += 1
+                        logger.error(f"ERROR | {url} | Status: {status}")
+
+                    processed += 1
+
+                except Exception as e:
                     if not dry_run:
-                        db.update_status(url, STATUS_ERROR, error_msg=f"Status: {status}")
+                        db.update_status(url, STATUS_ERROR, error_msg=str(e)[:200])
                     errors += 1
-                    print(f"[BOT]   ✗ Error")
+                    processed += 1
+                    logger.error(f"EXCEPTION | {url} | {e}")
 
-                processed += 1
+                # Advance progress bar
+                progress.update(task, advance=1)
 
-            except KeyboardInterrupt:
-                print(f"\n\n[INTERRUPTED] Stopping gracefully...")
-                break
-
-            except Exception as e:
-                print(f"[BOT]   ✗ Unexpected error: {e}")
-                if not dry_run:
-                    db.update_status(url, STATUS_ERROR, error_msg=str(e)[:200])
-                errors += 1
-                processed += 1
-
-            # Delay between profiles
-            if i < len(pending) - 1:
-                if bot.should_take_long_pause(processed):
-                    if not dry_run:
-                        bot.long_pause()
+                # Delay between profiles
+                if i < len(pending) - 1 and not _interrupted:
+                    if bot.should_take_long_pause(processed):
+                        if not dry_run:
+                            bot.long_pause()
                     else:
-                        print("[DRY RUN] Would take a long pause here")
-                else:
-                    if not dry_run:
-                        bot.profile_delay()
-                    else:
-                        print("[DRY RUN] Would delay before next profile")
+                        if not dry_run:
+                            if delay_override > 0:
+                                time.sleep(delay_override)
+                            else:
+                                bot.profile_delay()
 
-        # Print session summary
-        print(f"\n{'='*60}")
-        print(f"  Session Summary {'(DRY RUN)' if dry_run else ''}")
-        print(f"{'='*60}")
-        print(f"  Processed: {processed}")
-        print(f"  Sent:      {sent}")
-        print(f"  Skipped:   {skipped}")
-        print(f"  Errors:    {errors}")
-
-        if not dry_run:
-            summary = db.get_summary()
-            print(f"\n  Database Status:")
-            for status, count in summary.items():
-                if count > 0:
-                    print(f"    {status}: {count}")
-
-        print(f"{'='*60}\n")
-
-    except KeyboardInterrupt:
-        print(f"\n\n[INTERRUPTED] Shutting down...")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        print_error(f"Unexpected error: {e}")
 
     finally:
         bot.close()
-        db.close()
+        _bot_ref = None
+
+    # Print session summary
+    print_session_summary(
+        mode="connect",
+        processed=processed,
+        sent=sent,
+        skipped=skipped,
+        errors=errors,
+        dry_run=dry_run,
+    )
+    logger.info(f"Connect session done | processed={processed} sent={sent} skipped={skipped} errors={errors}")
+
+    if not dry_run:
+        summary = db.get_summary()
+        print_db_summary(summary)
+
+    db.close()
+    _db_ref = None
 
 
-def run_message(file_path: str, dry_run: bool = False, cap: int = 0):
+# ─── Message Workflow ────────────────────────────────────────────────────────
+
+def run_message(
+    file_path: str,
+    dry_run: bool = False,
+    cap: int = 0,
+    delay_override: float = 0,
+):
     """
     Run the follow-up message workflow.
 
@@ -236,57 +310,73 @@ def run_message(file_path: str, dry_run: bool = False, cap: int = 0):
         file_path: Path to CSV/XLSX/Google Sheets URL with LinkedIn profile URLs.
         dry_run: If True, visit profiles but don't send any messages.
         cap: Override daily message cap. 0 = use default from config.
+        delay_override: Override minimum delay between profiles. 0 = use default.
     """
+    global _interrupted, _bot_ref, _db_ref
+    _interrupted = False
+
+    logger = setup_logging()
     daily_cap = cap if cap > 0 else DAILY_MESSAGE_CAP
 
-    print(f"\n{'='*60}")
-    print(f"  LinkedIn Follow-Up Messaging {'(DRY RUN)' if dry_run else ''}")
-    print(f"{'='*60}\n")
+    print_banner("LinkedIn Follow-Up Messaging", dry_run=dry_run)
+    logger.info(f"Message mode started | file={file_path} | dry_run={dry_run} | cap={daily_cap}")
 
-    # Step 1: Import URLs (in case this is the first run for messaging)
+    # Step 1: Import URLs
     urls = read_spreadsheet(file_path)
     if not urls:
-        print("[ERROR] No valid LinkedIn URLs found in the file.")
+        print_error("No valid LinkedIn URLs found in the file.")
+        logger.error("No valid LinkedIn URLs found.")
         return
 
     db = Database()
+    _db_ref = db
     import_result = db.import_urls(urls)
     if import_result["imported"] > 0:
-        print(f"[DB] Imported {import_result['imported']} new URLs.")
+        print_info(f"Imported {import_result['imported']} new URLs.")
 
     # Step 2: Check daily message cap
     if db.is_daily_cap_reached(COUNTER_MESSAGES):
         today_count = db.get_daily_count(COUNTER_MESSAGES)
-        print(f"[CAP] Daily message cap reached ({today_count}/{daily_cap}). "
-              f"Try again tomorrow.")
+        print_cap(f"Daily message cap reached ({today_count}/{daily_cap}). Try again tomorrow.")
+        logger.warning(f"Daily message cap reached: {today_count}/{daily_cap}")
         db.close()
         return
 
-    # Step 3: Get profiles that had connection requests sent (candidates for messaging)
+    # Step 3: Get candidates
     remaining_today = daily_cap - db.get_daily_count(COUNTER_MESSAGES)
     candidates = db.get_accepted_profiles(limit=remaining_today)
 
     if not candidates:
-        print("[INFO] No profiles with 'request_sent' status to check for messaging.")
-        print("[INFO] Run connect mode first, then wait for connections to be accepted.")
+        print_info("No profiles with 'request_sent' status to check for messaging.")
+        print_info("Run connect mode first, then wait for connections to be accepted.")
         summary = db.get_summary()
-        print(f"[INFO] Summary: {summary}")
+        print_db_summary(summary)
         db.close()
         return
 
-    print(f"[INFO] Checking {len(candidates)} profiles for accepted connections "
-          f"(daily message cap: {daily_cap}, remaining: {remaining_today})\n")
+    print_info(
+        f"Checking {len(candidates)} profiles for accepted connections "
+        f"(daily message cap: {daily_cap}, remaining: {remaining_today})"
+    )
 
     # Step 4: Load template
     try:
         message_template = get_followup_message_template()
     except FileNotFoundError as e:
-        print(f"[ERROR] {e}")
+        print_error(str(e))
         db.close()
         return
 
     # Step 5: Launch browser and start processing
     bot = LinkedInBot()
+    _bot_ref = bot
+
+    # Stats
+    processed = 0
+    messaged = 0
+    still_pending = 0
+    skipped = 0
+    errors = 0
 
     try:
         logged_in = bot.start()
@@ -294,141 +384,159 @@ def run_message(file_path: str, dry_run: bool = False, cap: int = 0):
         if not logged_in:
             bot.login()
             if not bot.is_logged_in():
-                print("[ERROR] Login failed. Please try again.")
+                print_error("Login failed. Please try again.")
                 bot.close()
                 db.close()
                 return
 
-        # Stats for this session
-        processed = 0
-        messaged = 0
-        still_pending = 0
-        skipped = 0
-        errors = 0
+        logger.info(f"Browser launched, logged in. Checking {len(candidates)} profiles.")
 
-        for i, profile in enumerate(candidates):
-            url = profile["url"]
-            print(f"\n[{i+1}/{len(candidates)}] {url}")
+        with create_progress() as progress:
+            task = progress.add_task("Messaging...", total=len(candidates))
 
-            # Check daily cap before each profile
-            if db.is_daily_cap_reached(COUNTER_MESSAGES):
-                print(f"\n[CAP] Daily message cap reached ({daily_cap}). Stopping.")
-                break
+            for i, profile in enumerate(candidates):
+                if _interrupted:
+                    logger.info("Interrupted by user (Ctrl+C)")
+                    break
 
-            try:
-                if dry_run:
-                    status = bot.dry_run_message(url, message_template)
-                else:
-                    status = bot.send_followup_message(url, message_template)
+                url = profile["url"]
 
-                if status == STATUS_MESSAGED:
+                # Check daily cap before each profile
+                if db.is_daily_cap_reached(COUNTER_MESSAGES):
+                    print_cap(f"Daily message cap reached ({daily_cap}). Stopping.")
+                    logger.warning("Daily message cap reached mid-run")
+                    break
+
+                progress.update(task, description=f"[{i+1}/{len(candidates)}] {url[-40:]}...")
+
+                try:
+                    if dry_run:
+                        status = bot.dry_run_message(url, message_template)
+                    else:
+                        status = bot.send_followup_message(url, message_template)
+
+                    if status == STATUS_MESSAGED:
+                        if not dry_run:
+                            db.update_status(url, STATUS_MESSAGED)
+                            db.increment_daily_counter(COUNTER_MESSAGES)
+                        messaged += 1
+                        logger.info(f"MESSAGED | {url}")
+
+                    elif status == "not_connected":
+                        still_pending += 1
+                        logger.info(f"NOT_YET_CONNECTED | {url}")
+
+                    elif status == STATUS_SKIPPED:
+                        if not dry_run:
+                            db.update_status(url, STATUS_SKIPPED)
+                        skipped += 1
+                        logger.info(f"SKIPPED | {url}")
+
+                    else:
+                        if not dry_run:
+                            db.update_status(url, STATUS_ERROR, error_msg=f"Message error: {status}")
+                        errors += 1
+                        logger.error(f"ERROR | {url} | {status}")
+
+                    processed += 1
+
+                except Exception as e:
                     if not dry_run:
-                        db.update_status(url, STATUS_MESSAGED)
-                        db.increment_daily_counter(COUNTER_MESSAGES)
-                    messaged += 1
-                    print(f"[BOT]   ✓ Message sent")
-
-                elif status == "not_connected":
-                    # Still pending or connection was withdrawn — leave as request_sent
-                    print(f"[BOT]   ○ Not yet connected (still pending)")
-                    still_pending += 1
-
-                elif status == STATUS_SKIPPED:
-                    if not dry_run:
-                        db.update_status(url, STATUS_SKIPPED)
-                    print(f"[BOT]   ○ Skipped")
-                    skipped += 1
-
-                else:  # error
-                    if not dry_run:
-                        db.update_status(url, STATUS_ERROR, error_msg=f"Message error: {status}")
+                        db.update_status(url, STATUS_ERROR, error_msg=str(e)[:200])
                     errors += 1
-                    print(f"[BOT]   ✗ Error")
+                    processed += 1
+                    logger.error(f"EXCEPTION | {url} | {e}")
 
-                processed += 1
+                progress.update(task, advance=1)
 
-            except KeyboardInterrupt:
-                print(f"\n\n[INTERRUPTED] Stopping gracefully...")
-                break
-
-            except Exception as e:
-                print(f"[BOT]   ✗ Unexpected error: {e}")
-                if not dry_run:
-                    db.update_status(url, STATUS_ERROR, error_msg=str(e)[:200])
-                errors += 1
-                processed += 1
-
-            # Delay between profiles
-            if i < len(candidates) - 1:
-                if bot.should_take_long_pause(processed):
-                    if not dry_run:
-                        bot.long_pause()
+                # Delay between profiles
+                if i < len(candidates) - 1 and not _interrupted:
+                    if bot.should_take_long_pause(processed):
+                        if not dry_run:
+                            bot.long_pause()
                     else:
-                        print("[DRY RUN] Would take a long pause here")
-                else:
-                    if not dry_run:
-                        bot.profile_delay()
-                    else:
-                        print("[DRY RUN] Would delay before next profile")
+                        if not dry_run:
+                            if delay_override > 0:
+                                time.sleep(delay_override)
+                            else:
+                                bot.profile_delay()
 
-        # Print session summary
-        print(f"\n{'='*60}")
-        print(f"  Message Session Summary {'(DRY RUN)' if dry_run else ''}")
-        print(f"{'='*60}")
-        print(f"  Checked:       {processed}")
-        print(f"  Messaged:      {messaged}")
-        print(f"  Still pending: {still_pending}")
-        print(f"  Skipped:       {skipped}")
-        print(f"  Errors:        {errors}")
-
-        if not dry_run:
-            summary = db.get_summary()
-            print(f"\n  Database Status:")
-            for status_key, count in summary.items():
-                if count > 0:
-                    print(f"    {status_key}: {count}")
-
-        print(f"{'='*60}\n")
-
-    except KeyboardInterrupt:
-        print(f"\n\n[INTERRUPTED] Shutting down...")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        print_error(f"Unexpected error: {e}")
 
     finally:
         bot.close()
-        db.close()
+        _bot_ref = None
 
+    # Print session summary
+    print_session_summary(
+        mode="message",
+        processed=processed,
+        messaged=messaged,
+        still_pending=still_pending,
+        skipped=skipped,
+        errors=errors,
+        dry_run=dry_run,
+    )
+    logger.info(
+        f"Message session done | processed={processed} messaged={messaged} "
+        f"still_pending={still_pending} skipped={skipped} errors={errors}"
+    )
+
+    if not dry_run:
+        summary = db.get_summary()
+        print_db_summary(summary)
+
+    db.close()
+    _db_ref = None
+
+
+# ─── Status Dashboard ───────────────────────────────────────────────────────
 
 def show_status():
-    """Display the current progress summary from the database."""
+    """Display the rich status dashboard from the database."""
     db = Database()
     summary = db.get_summary()
     daily_connections = db.get_daily_count(COUNTER_CONNECTIONS)
     daily_messages = db.get_daily_count(COUNTER_MESSAGES)
-
-    print(f"\n{'='*60}")
-    print(f"  LinkedIn Auto-Connect — Status Dashboard")
-    print(f"{'='*60}\n")
-
-    print(f"  {'Status':<20} {'Count':>8}")
-    print(f"  {'─'*20} {'─'*8}")
-    for status, count in summary.items():
-        if status == "total":
-            print(f"  {'─'*20} {'─'*8}")
-        print(f"  {status:<20} {count:>8}")
-
-    print(f"\n  Today's connections sent: {daily_connections}/{DAILY_CONNECTION_CAP}")
-    print(f"  Today's messages sent:    {daily_messages}/{DAILY_MESSAGE_CAP}")
-
     daily_stats = db.get_daily_stats()
-    if daily_stats:
-        print(f"\n  Recent Activity:")
-        for day in daily_stats[:7]:
-            print(f"    {day['date']}: {day['connections_sent']} connects, "
-                  f"{day['messages_sent']} messages")
 
-    print(f"\n{'='*60}\n")
+    print_dashboard(summary, daily_connections, daily_messages, daily_stats)
     db.close()
 
+
+# ─── CSV Export ──────────────────────────────────────────────────────────────
+
+def export_csv(output_path: str):
+    """
+    Export all profiles from the database to a CSV file.
+
+    Args:
+        output_path: Path for the output CSV file.
+    """
+    logger = setup_logging()
+    db = Database()
+    profiles = db.get_all_profiles()
+
+    if not profiles:
+        print_info("No profiles in the database to export.")
+        db.close()
+        return
+
+    fieldnames = ["id", "url", "name", "status", "error_msg", "created_at", "updated_at"]
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(profiles)
+
+    print_export_success(output_path, len(profiles))
+    logger.info(f"Exported {len(profiles)} profiles to {output_path}")
+    db.close()
+
+
+# ─── CLI Entry Point ────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -442,33 +550,67 @@ Examples:
   python main.py --file urls.csv --mode connect --dry-run  Simulate without clicking
   python main.py --status                                  Show progress dashboard
   python main.py --reset-errors                            Retry failed profiles
+  python main.py --export results.csv                      Export all profiles to CSV
         """,
     )
 
-    parser.add_argument("--file", "-f", type=str, help="Path to spreadsheet (CSV/XLSX) or Google Sheets URL")
-    parser.add_argument("--mode", "-m", type=str, choices=["connect", "message", "both"],
-                       help="Operation mode: connect, message, or both")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate without sending requests")
-    parser.add_argument("--cap", type=int, default=0, help="Override daily connection cap for this run")
-    parser.add_argument("--status", "-s", action="store_true", help="Show progress dashboard")
-    parser.add_argument("--reset-errors", action="store_true", help="Reset error profiles to pending")
+    parser.add_argument(
+        "--file", "-f", type=str,
+        help="Path to spreadsheet (CSV/XLSX) or Google Sheets URL",
+    )
+    parser.add_argument(
+        "--mode", "-m", type=str, choices=["connect", "message", "both"],
+        help="Operation mode: connect, message, or both",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Simulate without sending requests or messages",
+    )
+    parser.add_argument(
+        "--cap", type=int, default=0,
+        help="Override daily cap for this run (connections or messages)",
+    )
+    parser.add_argument(
+        "--delay", type=float, default=0,
+        help="Override minimum delay (seconds) between profiles. 0 = use default",
+    )
+    parser.add_argument(
+        "--status", "-s", action="store_true",
+        help="Show progress dashboard",
+    )
+    parser.add_argument(
+        "--reset-errors", action="store_true",
+        help="Reset error profiles to pending for retry",
+    )
+    parser.add_argument(
+        "--export", "-e", type=str, metavar="FILE",
+        help="Export all profiles to CSV (e.g. --export results.csv)",
+    )
 
     args = parser.parse_args()
 
-    # Handle status display
+    # ── Handle status display ──
     if args.status:
         show_status()
         return
 
-    # Handle error reset
+    # ── Handle error reset ──
     if args.reset_errors:
         db = Database()
         count = db.reset_errors()
-        print(f"[DB] Reset {count} error profiles back to pending.")
+        if count > 0:
+            print_success(f"Reset {count} error profiles back to pending.")
+        else:
+            print_info("No error profiles to reset.")
         db.close()
         return
 
-    # Require --file and --mode for automation
+    # ── Handle CSV export ──
+    if args.export:
+        export_csv(args.export)
+        return
+
+    # ── Require --file and --mode for automation ──
     if not args.file:
         parser.error("--file is required for automation (use --status for dashboard)")
     if not args.mode:
@@ -477,19 +619,22 @@ Examples:
     # Validate file exists (unless Google Sheets URL)
     if not args.file.startswith("https://"):
         if not Path(args.file).exists():
-            print(f"[ERROR] File not found: {args.file}")
+            print_error(f"File not found: {args.file}")
             sys.exit(1)
 
-    # Run the selected mode
+    # ── Run the selected mode ──
     if args.mode == "connect":
-        run_connect(args.file, dry_run=args.dry_run, cap=args.cap)
+        run_connect(args.file, dry_run=args.dry_run, cap=args.cap, delay_override=args.delay)
+
     elif args.mode == "message":
-        run_message(args.file, dry_run=args.dry_run, cap=args.cap)
+        run_message(args.file, dry_run=args.dry_run, cap=args.cap, delay_override=args.delay)
+
     elif args.mode == "both":
-        print("[INFO] Running connect mode first...")
-        run_connect(args.file, dry_run=args.dry_run, cap=args.cap)
-        print("\n[INFO] Now running message mode for accepted connections...")
-        run_message(args.file, dry_run=args.dry_run, cap=args.cap)
+        print_info("Running connect mode first...")
+        run_connect(args.file, dry_run=args.dry_run, cap=args.cap, delay_override=args.delay)
+        console.print()
+        print_info("Now running message mode for accepted connections...")
+        run_message(args.file, dry_run=args.dry_run, cap=args.cap, delay_override=args.delay)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@
 | Spreadsheet I/O | `openpyxl`, `csv`, `gspread`   |
 | Database        | SQLite                         |
 | Config          | `.env` + `python-dotenv`       |
-| CLI             | `argparse`                     |
+| CLI             | `argparse` + `rich`          |
 | Console UI      | `rich` (progress bars, tables) |
 
 ---
@@ -29,6 +29,8 @@ Linkedin-help/
 ├── spreadsheet_reader.py    # Unified CSV / XLSX / Google Sheets reader
 ├── linkedin_bot.py          # Playwright automation (login, connect, message)
 ├── db.py                    # SQLite persistence & progress tracking
+├── console.py               # Rich console UI (progress bars, tables, colors)
+├── logger.py                # File logging to logs/run_YYYY-MM-DD.log
 ├── requirements.txt         # Python dependencies
 ├── .env                     # LinkedIn credentials (GIT-IGNORED)
 ├── .gitignore
@@ -36,9 +38,13 @@ Linkedin-help/
 ├── templates/
 │   ├── connection_note.txt  # Template for connection request note
 │   └── followup_message.txt # Template for follow-up message
+├── logs/                    # Daily log files (GIT-IGNORED)
 └── tests/
     ├── test_spreadsheet.py  # Unit tests for reader
     ├── test_db.py           # Unit tests for database
+    ├── test_console.py      # Unit tests for rich console UI
+    ├── test_logger.py       # Unit tests for file logging
+    ├── test_main.py         # Unit tests for CLI & export
     └── sample_urls.csv      # Sample data for testing
 ```
 
@@ -216,29 +222,38 @@ python main.py --file test_3.csv --mode message
 
 ---
 
-### Phase 6 — CLI Polish, Status Dashboard & Final Testing
+### Phase 6 — CLI Polish, Status Dashboard & Final Testing ✅
 
 **Goal:** Build the full CLI interface, rich console dashboard, logging, and end-to-end testing.
 
 **Deliverables:**
 
-- `main.py` — full CLI with `argparse`:
+- `console.py` — Rich console UI module:
+  - Color-coded status messages: green (✓ success), yellow (○ skipped), red (✗ error), cyan (ℹ info)
+  - Styled banners with DRY RUN indicator
+  - Live progress bar (`rich.progress`) with ETA, spinner, and counter
+  - Session summary table (processed, sent, skipped, errors)
+  - Database summary table (counts by status)
+  - Full status dashboard with cap usage bars and recent activity
+  - Safe markup escaping for all user-provided text
+- `logger.py` — File logging module:
+  - Creates `logs/` directory automatically
+  - Writes to `logs/run_YYYY-MM-DD.log` (appends to daily file)
+  - Format: `timestamp | LEVEL | message`
+  - Idempotent setup (no duplicate handlers)
+- `main.py` — Full CLI with `argparse`:
   - `python main.py --file <path> --mode connect|message|both` — main automation
-  - `python main.py --status` — show dashboard (rich table of status counts)
-  - `python main.py --reset-errors` — reset all `error` profiles back to `pending` for retry
-  - `python main.py --export results.csv` — export DB to CSV with all statuses
+  - `python main.py --status` — show rich dashboard (tables, cap bars, activity)
+  - `python main.py --reset-errors` — reset all `error` profiles back to `pending`
+  - `python main.py --export results.csv` — export DB to CSV with all columns
   - `--dry-run` flag — simulates without clicking
   - `--cap <number>` — override daily cap for this run
-  - `--delay <seconds>` — override min delay between profiles
-- Rich console output:
-  - Live progress bar (`rich.progress`) showing `[12/1000] Sending request to John...`
-  - Color-coded status: green (success), yellow (skipped), red (error)
-  - Summary table at end of run
-  - Estimated time remaining
-- File logging to `logs/run_YYYY-MM-DD.log`
-- Graceful Ctrl+C handling: catch `KeyboardInterrupt`, save state, print summary, exit clean
-- Final end-to-end test with 10 real URLs
-- Update this `README.md` with final usage instructions
+  - `--delay <seconds>` — override minimum delay between profiles
+- Graceful Ctrl+C handling:
+  - SIGINT handler sets a flag, current profile finishes cleanly
+  - Session summary always printed on exit
+  - Browser and DB connections closed properly
+- Tests: `test_console.py` (24 tests), `test_logger.py` (8 tests), `test_main.py` (14 tests)
 
 **Verification:**
 
