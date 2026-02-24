@@ -88,7 +88,7 @@
     </div>
     <div class="progress">
         {% set pct = (job.processed / job.total_profiles * 100) if job.total_profiles else 0 %}
-        <div class="progress-bar" id="progress-bar" style="width: {{ pct|round }}%"></div>
+        <div class="progress-bar" id="progress-bar" style="width: {{ pct|round|string + '%' }}"></div>
     </div>
     <div class="live-status mt-3" id="live-status">{{ job.live_status }}</div>
 </div>
@@ -134,7 +134,7 @@
 {% if job.status in ('running', 'pending') %}
 <script>
 // Poll for progress updates every 2 seconds
-const jobId = {{ job.id }};
+const jobId = JSON.parse('{{ job.id }}');
 let polling = setInterval(async () => {
     try {
         const res = await fetch(`/job/${jobId}/progress`);
