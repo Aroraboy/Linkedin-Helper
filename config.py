@@ -23,16 +23,16 @@ LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
 
 # ─── Delay Settings (seconds) ────────────────────────────────────────────────
 # Random delay between processing each profile (min, max)
-DELAY_BETWEEN_PROFILES = (45, 90)
+DELAY_BETWEEN_PROFILES = (10, 20)
 
 # Random delay between individual page actions like clicks and typing (min, max)
-DELAY_BETWEEN_ACTIONS = (2, 5)
+DELAY_BETWEEN_ACTIONS = (1, 2)
 
 # After every N profiles, take a long pause to appear more human
 LONG_PAUSE_EVERY_N = 10
 
-# Duration of the long pause (min, max) in seconds (default: 5–10 minutes)
-LONG_PAUSE_DURATION = (300, 600)
+# Duration of the long pause (min, max) in seconds (default: 1–2 minutes)
+LONG_PAUSE_DURATION = (60, 120)
 
 # ─── Daily Caps ──────────────────────────────────────────────────────────────
 # Maximum connection requests to send per day (LinkedIn soft-limits ~100/week)

@@ -503,8 +503,10 @@ class LinkedInBot:
             return STATUS_ERROR
 
         try:
+            full_name = profile_info["name"]
+
             # Step 2: Detect the current connection state
-            state = self._detect_connection_state()
+            state = self._detect_connection_state(full_name)
             print(f"[BOT]   Connection state: {state}")
 
             if state == "already_connected":
@@ -516,7 +518,7 @@ class LinkedInBot:
                 return STATUS_SKIPPED
 
             # Step 3: Click Connect (may be behind "More" dropdown)
-            clicked = self._click_connect_button(state)
+            clicked = self._click_connect_button(state, full_name)
             if not clicked:
                 print("[BOT]   Failed to click Connect button")
                 return STATUS_ERROR
@@ -547,97 +549,206 @@ class LinkedInBot:
             print(f"[BOT]   Error sending connection request: {e}")
             return STATUS_ERROR
 
-    def _detect_connection_state(self) -> str:
+    def _detect_connection_state(self, name: str = "") -> str:
         """
         Detect the current connection state with this profile.
 
+        Uses Playwright's get_by_role() with the accessible name pattern
+        "Invite {name} to" which is how LinkedIn labels the Connect button.
+
+        Args:
+            name: The profile person's full name (e.g. "Sriraj Behera").
+
         Returns:
-            "connect_visible"   — Connect button is directly visible
+            "connect_visible"   — Connect/Invite button is directly visible
             "connect_in_more"   — Connect is hidden in the "More" dropdown
             "already_pending"   — Invitation already sent (Pending)
-            "already_connected" — Already connected (Message button prominent)
-            "no_connect_button" — No connect option found (Follow-only, etc.)
+            "already_connected" — Already connected (Message button is primary/blue)
+            "no_connect_button" — No connect option found at all
         """
         page = self.page
 
-        # Check for "Pending" state
+        ACTION_BAR = (
+            ".pvs-profile-actions, "
+            ".pv-top-card-v2-ctas, "
+            "div.ph5 .pvs-profile-actions, "
+            ".pv-top-card .pv-top-card-v2-ctas"
+        )
+
+        # ── Debug: log the primary action buttons we see ──
         try:
-            pending = page.query_selector(
-                'button:has-text("Pending"), '
-                'span:has-text("Pending")'
-            )
-            if pending and pending.is_visible():
+            btns = page.query_selector_all(f"{ACTION_BAR} button")
+            visible_labels = []
+            for btn in btns:
+                try:
+                    if btn.is_visible():
+                        text = btn.inner_text().strip().replace("\n", " ")
+                        aria = btn.get_attribute("aria-label") or ""
+                        if text or aria:
+                            visible_labels.append(f"{text} [aria={aria}]")
+                except Exception:
+                    pass
+            if visible_labels:
+                print(f"[BOT]   Profile action buttons: {visible_labels}")
+        except Exception:
+            pass
+
+        # ── 1. Check for "Pending" state ──
+        try:
+            pending_btn = page.get_by_role("button", name="Pending")
+            if pending_btn.is_visible():
                 return "already_pending"
         except Exception:
             pass
 
-        # Check for direct "Connect" button in the main action bar
+        # ── 2. Check for "Invite {name} to" / "Invite {name} to connect" button ──
+        # LinkedIn uses two variants:
+        #   - Direct Connect button: "Invite {name} to"
+        #   - More dropdown Connect: "Invite {name} to connect"
+        if name:
+            for variant in [f"Invite {name} to connect", f"Invite {name} to"]:
+                try:
+                    invite_btn = page.get_by_role("button", name=variant)
+                    if invite_btn.is_visible():
+                        return "connect_visible"
+                except Exception:
+                    pass
+
+        # ── 3. Fallback: check any button with aria-label containing "Invite" ──
         try:
-            connect_btn = page.query_selector(
-                'button.pvs-profile-actions__action:has-text("Connect"), '
-                'button[aria-label*="connect" i]:not([aria-label*="disconnect"]), '
-                'main button:has-text("Connect")'
-            )
-            if connect_btn and connect_btn.is_visible():
-                # Make sure it's actually the Connect button and not something else
-                text = connect_btn.inner_text().strip()
-                if "Connect" in text and "Disconnect" not in text:
-                    return "connect_visible"
+            btns = page.query_selector_all(f"{ACTION_BAR} button")
+            for btn in btns:
+                try:
+                    if btn.is_visible():
+                        aria = (btn.get_attribute("aria-label") or "")
+                        if "Invite" in aria and " to" in aria:
+                            return "connect_visible"
+                except Exception:
+                    continue
         except Exception:
             pass
 
-        # Check if "Connect" is inside the "More" dropdown
+        # ── 4. Check for FILLED BLUE "Message" button (primary = connected) ──
         try:
-            more_btn = page.query_selector(
-                'button[aria-label="More actions"], '
-                'button.pvs-profile-actions__overflow-toggle, '
-                'button:has-text("More")'
+            msg_btn = page.query_selector(
+                f'{ACTION_BAR} button.artdeco-button--primary:has-text("Message")'
             )
-            if more_btn and more_btn.is_visible():
-                more_btn.click()
-                self._random_delay((1, 2))
-
-                connect_in_dropdown = page.query_selector(
-                    'div[data-test-dropdown] span:has-text("Connect"), '
-                    '.artdeco-dropdown__content span:has-text("Connect"), '
-                    '[role="listbox"] span:has-text("Connect"), '
-                    'li span:has-text("Connect")'
-                )
-                if connect_in_dropdown and connect_in_dropdown.is_visible():
-                    # Close the dropdown first (we'll reopen when clicking)
-                    page.keyboard.press("Escape")
-                    self._random_delay((0.5, 1))
-                    return "connect_in_more"
-
-                # Check if "Message" is prominent (already connected)
-                message_in_dropdown = page.query_selector(
-                    'span:has-text("Message")'
-                )
-                # Close dropdown
-                page.keyboard.press("Escape")
-                self._random_delay((0.5, 1))
-        except Exception:
-            pass
-
-        # Check for prominent "Message" button (means already connected)
-        try:
-            message_btn = page.query_selector(
-                'button.pvs-profile-actions__action:has-text("Message"), '
-                'a:has-text("Message")'
-            )
-            if message_btn and message_btn.is_visible():
+            if msg_btn and msg_btn.is_visible():
                 return "already_connected"
+        except Exception:
+            pass
+
+        # ── 5. Check "More" dropdown for Connect ──
+        try:
+            found_in_more = self._check_more_dropdown_for_connect(name)
+            if found_in_more:
+                return "connect_in_more"
         except Exception:
             pass
 
         return "no_connect_button"
 
-    def _click_connect_button(self, state: str) -> bool:
+    def _check_more_dropdown_for_connect(self, name: str = "") -> bool:
+        """
+        Open the 'More' dropdown on a profile and check if 'Connect' is listed.
+        Closes the dropdown before returning.
+
+        Args:
+            name: Full name of the profile person.
+
+        Returns:
+            True if Connect was found in the More dropdown.
+        """
+        page = self.page
+        try:
+            # Use exact selector from Codegen
+            more_btn = page.get_by_role("button", name="More actions")
+            if not more_btn.is_visible():
+                return False
+
+            more_btn.click()
+            self._random_delay((1, 2))
+
+            # Debug: log all items visible in the dropdown
+            try:
+                dropdown_items = page.query_selector_all(
+                    '.artdeco-dropdown__content li, '
+                    '.artdeco-dropdown__content-inner li, '
+                    '.artdeco-dropdown__content .artdeco-dropdown__item'
+                )
+                visible_items = []
+                for item in dropdown_items:
+                    try:
+                        if item.is_visible():
+                            text = item.inner_text().strip().replace("\n", " ")
+                            aria = ""
+                            try:
+                                btn = item.query_selector("button, a, div[role='button']")
+                                if btn:
+                                    aria = btn.get_attribute("aria-label") or ""
+                            except Exception:
+                                pass
+                            if text or aria:
+                                visible_items.append(f"{text} [aria={aria}]")
+                    except Exception:
+                        pass
+                if visible_items:
+                    print(f"[BOT]   More dropdown items: {visible_items}")
+            except Exception:
+                pass
+
+            # Check for "Invite {name} to connect" / "Invite {name} to" in dropdown
+            if name:
+                for variant in [f"Invite {name} to connect", f"Invite {name} to"]:
+                    try:
+                        invite_item = page.get_by_role("button", name=variant)
+                        if invite_item.is_visible():
+                            page.keyboard.press("Escape")
+                            self._random_delay((0.5, 1))
+                            return True
+                    except Exception:
+                        pass
+
+            # Fallback: look for any element with aria-label containing "Invite"
+            try:
+                items = page.query_selector_all(
+                    '.artdeco-dropdown__content [aria-label*="Invite"], '
+                    '.artdeco-dropdown__content span:has-text("Connect"), '
+                    '.artdeco-dropdown__content div:has-text("Connect")'
+                )
+                for item in items:
+                    try:
+                        if item.is_visible():
+                            page.keyboard.press("Escape")
+                            self._random_delay((0.5, 1))
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Close the dropdown
+            page.keyboard.press("Escape")
+            self._random_delay((0.5, 1))
+
+            return False
+        except Exception:
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
+    def _click_connect_button(self, state: str, name: str = "") -> bool:
         """
         Click the Connect button based on detected state.
 
+        Uses Playwright get_by_role with "Invite {name} to" accessible name
+        (the actual label LinkedIn gives the Connect button).
+
         Args:
             state: "connect_visible" or "connect_in_more"
+            name: Full name of the profile person.
 
         Returns:
             True if successfully clicked, False otherwise.
@@ -646,54 +757,92 @@ class LinkedInBot:
 
         if state == "connect_visible":
             try:
-                connect_btn = page.query_selector(
-                    'button.pvs-profile-actions__action:has-text("Connect"), '
-                    'button[aria-label*="connect" i]:not([aria-label*="disconnect"]), '
-                    'main button:has-text("Connect")'
-                )
-                if connect_btn and connect_btn.is_visible():
-                    connect_btn.click()
-                    return True
+                # Primary: use get_by_role with both name variants (from Codegen)
+                if name:
+                    for variant in [f"Invite {name} to connect", f"Invite {name} to"]:
+                        try:
+                            invite_btn = page.get_by_role("button", name=variant)
+                            if invite_btn.is_visible():
+                                print(f"[BOT]   Clicking '{variant}' button")
+                                invite_btn.click()
+                                return True
+                        except Exception:
+                            continue
+
+                # Fallback: find button by aria-label containing "Invite"
+                ACTION_BAR = ".pvs-profile-actions, .pv-top-card-v2-ctas"
+                btns = page.query_selector_all(f"{ACTION_BAR} button")
+                for btn in btns:
+                    try:
+                        if btn.is_visible():
+                            aria = btn.get_attribute("aria-label") or ""
+                            if "Invite" in aria and " to" in aria:
+                                print(f"[BOT]   Clicking button [aria-label='{aria}']")
+                                btn.click()
+                                return True
+                    except Exception:
+                        continue
+
             except Exception as e:
                 print(f"[BOT]   Error clicking Connect button: {e}")
                 return False
 
         elif state == "connect_in_more":
             try:
-                # Open the More dropdown
-                more_btn = page.query_selector(
-                    'button[aria-label="More actions"], '
-                    'button.pvs-profile-actions__overflow-toggle, '
-                    'button:has-text("More")'
-                )
-                if more_btn:
+                # Open the More dropdown (exact selector from Codegen)
+                more_btn = page.get_by_role("button", name="More actions")
+                if more_btn.is_visible():
+                    print(f"[BOT]   Opening 'More actions' dropdown")
                     more_btn.click()
                     self._random_delay((1, 2))
 
-                    # Click Connect in the dropdown
-                    connect_item = page.query_selector(
-                        'div[data-test-dropdown] span:has-text("Connect"), '
+                    # Primary: try both Codegen name variants
+                    if name:
+                        for variant in [f"Invite {name} to connect", f"Invite {name} to"]:
+                            try:
+                                invite_item = page.get_by_role("button", name=variant)
+                                if invite_item.is_visible():
+                                    print(f"[BOT]   Clicking '{variant}' in dropdown")
+                                    invite_item.click()
+                                    return True
+                            except Exception:
+                                continue
+
+                    # Fallback: find by aria-label or text
+                    items = page.query_selector_all(
+                        '.artdeco-dropdown__content [aria-label*="Invite"], '
                         '.artdeco-dropdown__content span:has-text("Connect"), '
-                        '[role="listbox"] span:has-text("Connect"), '
-                        'li span:has-text("Connect")'
+                        'li:has-text("Connect")'
                     )
-                    if connect_item:
-                        connect_item.click()
-                        return True
+                    for item in items:
+                        try:
+                            if item.is_visible():
+                                print(f"[BOT]   Clicking Connect in dropdown (fallback)")
+                                item.click()
+                                return True
+                        except Exception:
+                            continue
+
+                    print("[BOT]   Connect not found in More dropdown")
+                    page.keyboard.press("Escape")
             except Exception as e:
                 print(f"[BOT]   Error clicking Connect in More dropdown: {e}")
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
                 return False
 
         return False
 
     def _handle_connection_modal(self, note: str) -> bool:
         """
-        Handle the connection request modal: optionally add a note and send.
+        Handle the connection request modal: add a note and send.
 
-        After clicking "Connect", LinkedIn may show:
-            1. A modal asking "How do you know [name]?" → click "Other" then "Connect"
-            2. A modal with "Add a note" option → click it, type note, click "Send"
-            3. Directly a send button
+        Uses exact selectors from Playwright Codegen:
+        1. Click "Add a note" button
+        2. Fill the note textbox ("Please limit personal note to")
+        3. Click "Send invitation"
 
         Args:
             note: The personalized connection note to include.
@@ -702,10 +851,38 @@ class LinkedInBot:
             True if the request was sent successfully, False otherwise.
         """
         page = self.page
+
+        # Wait for a modal / overlay to appear
+        try:
+            page.wait_for_selector(
+                '.artdeco-modal, [role="dialog"], .send-invite',
+                timeout=5000,
+            )
+        except Exception:
+            print("[BOT]   No modal appeared after clicking Connect")
         self._random_delay((1, 3))
 
+        # ── Debug: log all visible buttons in the modal ──
         try:
-            # Check for LinkedIn's weekly cap warning
+            modal_buttons = page.query_selector_all(
+                '.artdeco-modal button, [role="dialog"] button'
+            )
+            visible_labels = []
+            for btn in modal_buttons:
+                try:
+                    if btn.is_visible():
+                        label = btn.inner_text().strip().replace("\n", " ")
+                        aria = btn.get_attribute("aria-label") or ""
+                        visible_labels.append(f"{label} (aria={aria})")
+                except Exception:
+                    pass
+            if visible_labels:
+                print(f"[BOT]   Modal buttons found: {visible_labels}")
+        except Exception:
+            pass
+
+        # ── Check for LinkedIn's weekly cap warning ──
+        try:
             cap_warning = page.query_selector(
                 'div:has-text("You\'ve reached the weekly invitation limit"), '
                 'div:has-text("weekly invitation limit")'
@@ -717,58 +894,145 @@ class LinkedInBot:
         except Exception:
             pass
 
-        # Try to find "Add a note" button
+        # ── Strategy 1: "Add a note" → fill textbox → "Send invitation" ──
+        # (Exact flow from Playwright Codegen)
         try:
-            add_note_btn = page.query_selector(
-                'button[aria-label="Add a note"], '
-                'button:has-text("Add a note")'
-            )
-            if add_note_btn and add_note_btn.is_visible():
+            add_note_btn = page.get_by_role("button", name="Add a note")
+            if add_note_btn.is_visible():
                 add_note_btn.click()
+                print("[BOT]   Clicked 'Add a note'")
                 self._random_delay((1, 2))
 
-                # Type the note in the textarea
-                note_field = page.wait_for_selector(
-                    'textarea[name="message"], '
-                    'textarea#custom-message, '
-                    'textarea.connect-button-send-invite__custom-message, '
-                    '.artdeco-modal textarea, '
-                    'textarea',
-                    timeout=5000,
-                )
-                if note_field:
-                    note_field.fill("")  # Clear any existing text
-                    self._random_delay((0.5, 1))
-                    # Type character-by-character for human-like input
-                    note_field.type(note, delay=random.randint(30, 80))
-                    self._random_delay((1, 2))
+                # Fill the note textbox
+                textbox = page.get_by_role("textbox", name="Please limit personal note to")
+                textbox.fill(note)
+                print(f"[BOT]   Typed note ({len(note)} chars)")
+                self._random_delay((1, 2))
 
-                    # Click "Send" / "Send invitation"
-                    return self._click_send_button()
+                # Click Send invitation
+                send_btn = page.get_by_role("button", name="Send invitation")
+                send_btn.click()
+                print("[BOT]   Clicked 'Send invitation'")
+                self._random_delay((1, 3))
+
+                # Verify modal closed
+                try:
+                    page.wait_for_selector(
+                        '.artdeco-modal, [role="dialog"]',
+                        state='hidden',
+                        timeout=5000,
+                    )
+                except Exception:
+                    pass
+                return True
         except Exception as e:
-            print(f"[BOT]   Error adding note: {e}")
+            print(f"[BOT]   Strategy 1 (Add a note) failed: {e}")
 
-        # If "Add a note" wasn't found, try handling "How do you know" modal
+        # ── Strategy 2: Textarea already visible (no "Add a note" step) ──
         try:
-            other_option = page.query_selector(
-                'label:has-text("Other"), '
-                'button:has-text("Other")'
-            )
-            if other_option and other_option.is_visible():
-                other_option.click()
+            textbox = page.get_by_role("textbox", name="Please limit personal note to")
+            if textbox.is_visible():
+                print("[BOT]   Textarea already visible, typing note...")
+                textbox.fill(note)
+                print(f"[BOT]   Typed note ({len(note)} chars)")
                 self._random_delay((1, 2))
+                send_btn = page.get_by_role("button", name="Send invitation")
+                send_btn.click()
+                print("[BOT]   Clicked 'Send invitation'")
+                self._random_delay((1, 3))
+                return True
+        except Exception:
+            pass
 
-                # Now look for "Connect" or "Send" button
+        # ── Strategy 3: "How do you know" modal → click "Other" → proceed ──
+        try:
+            other_selectors = [
+                'label:has-text("Other")',
+                'button:has-text("Other")',
+                '.artdeco-modal label:has-text("Other")',
+            ]
+            for sel in other_selectors:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click()
+                    print("[BOT]   Clicked 'Other' option")
+                    self._random_delay((1, 2))
+                    return self._click_send_button()
+        except Exception:
+            pass
+
+        # ── Strategy 4: "Send without a note" fallback ──
+        try:
+            send_without = page.get_by_role("button", name="Send without a note")
+            if send_without.is_visible():
+                print("[BOT]   Sending without a note (no note option available)")
+                send_without.click()
+                self._random_delay((1, 3))
+                return True
+        except Exception:
+            pass
+
+        # ── Strategy 5: Try clicking Send invitation directly ──
+        return self._click_send_button()
+
+    def _type_note_and_send(self, note: str) -> bool:
+        """
+        Type a note into the modal's textarea and click Send.
+
+        Uses Playwright get_by_role selectors from Codegen.
+
+        Args:
+            note: The personalized connection note text.
+
+        Returns:
+            True if sent successfully, False otherwise.
+        """
+        page = self.page
+
+        try:
+            # Primary: use get_by_role (from Codegen)
+            textbox = page.get_by_role("textbox", name="Please limit personal note to")
+            if textbox.is_visible():
+                textbox.fill(note)
+                self._random_delay((1, 2))
+                print(f"[BOT]   Typed note ({len(note)} chars)")
                 return self._click_send_button()
         except Exception:
             pass
 
-        # Last resort: try directly clicking Send
-        return self._click_send_button()
+        # Fallback: find textarea by CSS
+        try:
+            textarea_selectors = [
+                '.artdeco-modal textarea',
+                '[role="dialog"] textarea',
+                'textarea[name="message"]',
+                'textarea',
+            ]
+
+            for sel in textarea_selectors:
+                try:
+                    field = page.wait_for_selector(sel, timeout=3000)
+                    if field and field.is_visible():
+                        field.fill(note)
+                        self._random_delay((1, 2))
+                        print(f"[BOT]   Typed note ({len(note)} chars) (fallback selector)")
+                        return self._click_send_button()
+                except Exception:
+                    continue
+
+            print("[BOT]   Could not find note textarea")
+            return self._click_send_button()
+
+        except Exception as e:
+            print(f"[BOT]   Error typing note: {e}")
+            return self._click_send_button()
 
     def _click_send_button(self) -> bool:
         """
         Find and click the Send / Send invitation button in a modal.
+
+        Primary selector from Playwright Codegen:
+            get_by_role("button", name="Send invitation")
 
         Returns:
             True if clicked successfully, False otherwise.
@@ -776,32 +1040,71 @@ class LinkedInBot:
         page = self.page
         self._random_delay((0.5, 1.5))
 
+        # Primary: use get_by_role (from Codegen)
+        try:
+            send_btn = page.get_by_role("button", name="Send invitation")
+            if send_btn.is_visible():
+                print("[BOT]   Clicking 'Send invitation'")
+                send_btn.click()
+                self._random_delay((1, 3))
+                try:
+                    page.wait_for_selector(
+                        '.artdeco-modal, [role="dialog"]',
+                        state='hidden',
+                        timeout=5000,
+                    )
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+
+        # Fallback selectors
         send_selectors = [
             'button[aria-label="Send invitation"]',
             'button[aria-label="Send now"]',
             'button:has-text("Send invitation")',
-            'button:has-text("Send")',
+            'button:has-text("Send now")',
             '.artdeco-modal button.artdeco-button--primary',
+            '[role="dialog"] button.artdeco-button--primary',
+            '.artdeco-modal button:has-text("Send")',
+            '[role="dialog"] button:has-text("Send")',
         ]
 
         for selector in send_selectors:
             try:
                 btn = page.query_selector(selector)
                 if btn and btn.is_visible() and btn.is_enabled():
+                    text = btn.inner_text().strip()
+                    print(f"[BOT]   Clicking send button: '{text}'")
                     btn.click()
                     self._random_delay((1, 3))
-
-                    # Verify the modal closed (request sent successfully)
                     try:
-                        page.wait_for_selector('.artdeco-modal', state='hidden', timeout=5000)
+                        page.wait_for_selector(
+                            '.artdeco-modal, [role="dialog"]',
+                            state='hidden',
+                            timeout=5000,
+                        )
                     except Exception:
-                        pass  # Modal may have already closed
-
+                        pass
                     return True
             except Exception:
                 continue
 
-        print("[BOT]   Could not find Send button")
+        # Debug: log visible buttons
+        try:
+            all_buttons = page.query_selector_all("button")
+            visible = []
+            for b in all_buttons:
+                try:
+                    if b.is_visible():
+                        visible.append(b.inner_text().strip()[:40])
+                except Exception:
+                    pass
+            print(f"[BOT]   Could not find Send button. Visible buttons: {visible[:15]}")
+        except Exception:
+            print("[BOT]   Could not find Send button")
+
         return False
 
     # ─── Dry Run ─────────────────────────────────────────────────────────────
@@ -828,7 +1131,7 @@ class LinkedInBot:
             if len(personalized_note) > 300:
                 personalized_note = personalized_note[:297] + "..."
 
-            state = self._detect_connection_state()
+            state = self._detect_connection_state(profile_info['name'])
 
             print(f"[DRY RUN] Profile: {profile_info['name']}")
             print(f"[DRY RUN] State: {state}")
@@ -870,8 +1173,8 @@ class LinkedInBot:
             "error"         — Could not determine
         """
         try:
-            self.visit_profile(url)
-            state = self._detect_connection_state()
+            profile_info = self.visit_profile(url)
+            state = self._detect_connection_state(profile_info['name'])
 
             if state == "already_connected":
                 return "connected"

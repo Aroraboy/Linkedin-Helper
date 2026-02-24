@@ -15,7 +15,7 @@
 | Spreadsheet I/O | `openpyxl`, `csv`, `gspread`   |
 | Database        | SQLite                         |
 | Config          | `.env` + `python-dotenv`       |
-| CLI             | `argparse` + `rich`          |
+| CLI             | `argparse` + `rich`            |
 | Console UI      | `rich` (progress bars, tables) |
 
 ---
