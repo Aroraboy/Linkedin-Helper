@@ -34,18 +34,16 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # Copy application code
 COPY . .
 
-# Create a data directory for the SQLite DB (persistent volume mount point)
-RUN mkdir -p /data
+# Create a data directory for the SQLite DB
+RUN mkdir -p /app/data
 
-# Environment
-ENV PORT=5000
+# Environment — do NOT set PORT; Railway injects it dynamically
 ENV SECRET_KEY=change-me-in-production
-ENV DATABASE_URL=sqlite:////data/web_app.db
+ENV DATABASE_URL=sqlite:////app/data/web_app.db
 ENV PYTHONUNBUFFERED=1
 ENV HEADLESS=true
 
-EXPOSE ${PORT:-5000}
+EXPOSE 5000
 
-# Use gunicorn with enough timeout for Playwright operations
-# Shell form so $PORT is expanded at runtime (Railway sets PORT dynamically)
-CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 4 --timeout 600 --log-level info wsgi:app
+# Use gunicorn — Railway overrides CMD via startCommand in railway.toml
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "600", "--log-level", "info", "wsgi:app"]
