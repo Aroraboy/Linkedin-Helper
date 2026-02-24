@@ -123,7 +123,9 @@ class LinkedInBot:
                 "--disable-background-networking",
                 "--disable-sync",
                 "--no-first-run",
-                "--single-process",
+                "--disable-setuid-sandbox",
+                "--disable-accelerated-2d-canvas",
+                "--no-zygote",
                 "--window-size=1280,800",
             ],
         )

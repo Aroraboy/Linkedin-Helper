@@ -160,7 +160,12 @@ def start(job_id):
         )
         db.session.commit()
 
-    start_job(current_app._get_current_object(), job_id, headless=request.form.get("browser_mode") == "headless")
+    # Force headless on server (Railway / Docker) — HEADLESS env var is set in Dockerfile
+    import os
+    force_headless = os.environ.get("HEADLESS", "").lower() == "true"
+    headless = force_headless or request.form.get("browser_mode") == "headless"
+
+    start_job(current_app._get_current_object(), job_id, headless=headless)
     flash("Job started!", "success")
     return redirect(url_for("dashboard.job_detail", job_id=job_id))
 
