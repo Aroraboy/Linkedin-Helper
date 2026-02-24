@@ -47,10 +47,10 @@
                                 <i class="bi bi-shield-lock me-1"></i>
                                 LinkedIn is asking for verification. See the screenshot below to know what's required.
                             </div>
-                            {% if session.get('li_screenshot') %}
+                            {% if session.get('li_screenshot_ready') %}
                             <div class="mb-3 text-center">
                                 <p class="text-muted small mb-1">What LinkedIn is showing:</p>
-                                <img src="data:image/png;base64,{{ session['li_screenshot'] }}"
+                                <img src="{{ url_for('static', filename='screenshots/challenge_' ~ current_user.id ~ '.png') }}?t={{ range(99999) | random }}"
                                      alt="LinkedIn challenge page"
                                      class="img-fluid rounded border"
                                      style="max-height: 300px;">

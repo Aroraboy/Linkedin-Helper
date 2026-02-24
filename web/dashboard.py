@@ -302,9 +302,15 @@ def linkedin_login():
         if result["needs_verification"]:
             # Store intermediate state in Flask session for the verify step
             flask_session["li_intermediate_state"] = result.get("intermediate_state")
-            # Store screenshot so user can see what LinkedIn is showing
+            # Save screenshot to file (Flask cookie session is too small for images)
             if result.get("screenshot_b64"):
-                flask_session["li_screenshot"] = result["screenshot_b64"]
+                import base64, os
+                screenshot_dir = os.path.join(current_app.static_folder, "screenshots")
+                os.makedirs(screenshot_dir, exist_ok=True)
+                screenshot_path = os.path.join(screenshot_dir, f"challenge_{current_user.id}.png")
+                with open(screenshot_path, "wb") as f:
+                    f.write(base64.b64decode(result["screenshot_b64"]))
+                flask_session["li_screenshot_ready"] = True
             page_text = result.get("page_text", "")
             flash(
                 f"LinkedIn requires verification. Check your email/phone for a code. "
