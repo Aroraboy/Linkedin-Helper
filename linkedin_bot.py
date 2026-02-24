@@ -7,9 +7,7 @@ Handles:
     - Session restoration across runs (no repeated logins)
     - Profile visiting & name extraction
     - Connection request sending with personalized notes
-
-Future phases will add:
-    - Follow-up messaging (Phase 5)
+    - Follow-up messaging to accepted connections
 """
 
 import json
@@ -29,7 +27,9 @@ from config import (
     LONG_PAUSE_DURATION,
     LONG_PAUSE_EVERY_N,
     STATE_PATH,
+    STATUS_CONNECTED,
     STATUS_ERROR,
+    STATUS_MESSAGED,
     STATUS_PENDING,
     STATUS_REQUEST_SENT,
     STATUS_SKIPPED,
@@ -37,6 +37,7 @@ from config import (
     VIEWPORT_HEIGHT,
     VIEWPORT_WIDTH,
     get_connection_note_template,
+    get_followup_message_template,
 )
 
 
@@ -841,6 +842,312 @@ class LinkedInBot:
                 return "already_pending"
             else:
                 return STATUS_SKIPPED
+
+        except ProfileNotFoundError:
+            print(f"[DRY RUN] Profile not found (404)")
+            return STATUS_ERROR
+        except SessionExpiredError:
+            print(f"[DRY RUN] Session expired")
+            return STATUS_ERROR
+        except Exception as e:
+            print(f"[DRY RUN] Error: {e}")
+            return STATUS_ERROR
+
+
+    # ─── Follow-Up Messaging ─────────────────────────────────────────────────
+
+    def check_connection_status(self, url: str) -> str:
+        """
+        Visit a profile and check if the connection has been accepted.
+
+        Args:
+            url: LinkedIn profile URL.
+
+        Returns:
+            "connected"     — Message button present (accepted)
+            "pending"       — Still pending
+            "not_connected" — No connection relationship
+            "error"         — Could not determine
+        """
+        try:
+            self.visit_profile(url)
+            state = self._detect_connection_state()
+
+            if state == "already_connected":
+                return "connected"
+            elif state == "already_pending":
+                return "pending"
+            elif state in ("connect_visible", "connect_in_more"):
+                return "not_connected"
+            else:
+                return "not_connected"
+
+        except ProfileNotFoundError:
+            return "error"
+        except SessionExpiredError:
+            return "error"
+        except Exception:
+            return "error"
+
+    def send_followup_message(self, url: str, message_template: Optional[str] = None) -> str:
+        """
+        Visit a profile and send a follow-up message if connected.
+
+        Args:
+            url: LinkedIn profile URL.
+            message_template: Message with {first_name} placeholder.
+                             If None, loads from templates/followup_message.txt.
+
+        Returns:
+            Status string: "messaged", "not_connected", "skipped", "error"
+        """
+        if message_template is None:
+            message_template = get_followup_message_template()
+
+        try:
+            # Step 1: Visit the profile
+            profile_info = self.visit_profile(url)
+            first_name = profile_info["first_name"]
+            print(f"[BOT]   Name: {profile_info['name']}")
+
+        except ProfileNotFoundError:
+            print(f"[BOT]   Profile not found (404)")
+            return STATUS_ERROR
+
+        except SessionExpiredError:
+            print(f"[BOT]   Session expired! Need to re-login.")
+            return STATUS_ERROR
+
+        except Exception as e:
+            print(f"[BOT]   Error visiting profile: {e}")
+            return STATUS_ERROR
+
+        try:
+            # Step 2: Check if "Message" button is available (means connected)
+            message_btn = self._find_message_button()
+            if not message_btn:
+                print(f"[BOT]   No Message button found — not connected")
+                return "not_connected"
+
+            # Step 3: Click Message button to open chat
+            message_btn.click()
+            self._random_delay((2, 4))
+
+            # Step 4: Wait for chat modal / message box to appear
+            msg_box = self._wait_for_message_box()
+            if not msg_box:
+                print(f"[BOT]   Chat box did not open. Retrying...")
+                # Retry once
+                self.page.keyboard.press("Escape")
+                self._random_delay((1, 2))
+                message_btn = self._find_message_button()
+                if message_btn:
+                    message_btn.click()
+                    self._random_delay((2, 4))
+                    msg_box = self._wait_for_message_box()
+
+                if not msg_box:
+                    print(f"[BOT]   Chat box failed to open after retry")
+                    return STATUS_ERROR
+
+            # Step 5: Type the personalized message
+            personalized_msg = message_template.format(first_name=first_name)
+            self._type_message(msg_box, personalized_msg)
+            self._random_delay((1, 2))
+
+            # Step 6: Send the message
+            sent = self._click_message_send()
+            if sent:
+                print(f"[BOT]   ✓ Follow-up message sent!")
+                # Close the chat modal
+                self._close_chat_modal()
+                return STATUS_MESSAGED
+            else:
+                print(f"[BOT]   Failed to send message")
+                self._close_chat_modal()
+                return STATUS_ERROR
+
+        except Exception as e:
+            print(f"[BOT]   Error sending message: {e}")
+            self._close_chat_modal()
+            return STATUS_ERROR
+
+    def _find_message_button(self) -> Optional[object]:
+        """
+        Find the Message button on a profile page.
+        Returns the element if found and visible, None otherwise.
+        """
+        page = self.page
+        selectors = [
+            'button.pvs-profile-actions__action:has-text("Message")',
+            'button[aria-label*="message" i]',
+            'a.message-anywhere-button',
+            'main button:has-text("Message")',
+        ]
+
+        for selector in selectors:
+            try:
+                btn = page.query_selector(selector)
+                if btn and btn.is_visible():
+                    text = btn.inner_text().strip()
+                    if "Message" in text:
+                        return btn
+            except Exception:
+                continue
+
+        return None
+
+    def _wait_for_message_box(self, timeout: int = 8000) -> Optional[object]:
+        """
+        Wait for the messaging text input to appear after clicking Message.
+
+        Returns:
+            The message input element, or None if not found.
+        """
+        page = self.page
+        selectors = [
+            'div.msg-form__contenteditable[contenteditable="true"]',
+            'div[role="textbox"][aria-label*="message" i]',
+            'div.msg-form__msg-content-container div[contenteditable]',
+            '.msg-overlay-conversation-bubble div[contenteditable="true"]',
+            'div[contenteditable="true"][aria-placeholder]',
+        ]
+
+        for selector in selectors:
+            try:
+                el = page.wait_for_selector(selector, timeout=timeout)
+                if el and el.is_visible():
+                    return el
+            except Exception:
+                continue
+
+        return None
+
+    def _type_message(self, msg_box, message: str):
+        """
+        Type a message into the chat box with human-like character-by-character input.
+
+        Args:
+            msg_box: The contenteditable message input element.
+            message: The message text to type.
+        """
+        # Click to focus
+        msg_box.click()
+        self._random_delay((0.5, 1))
+
+        # Clear any existing content
+        self.page.keyboard.press("Control+a")
+        self.page.keyboard.press("Backspace")
+        self._random_delay((0.3, 0.6))
+
+        # Type character by character with random delays for human-like input
+        for char in message:
+            self.page.keyboard.type(char, delay=random.randint(25, 75))
+
+            # Occasional longer pause after punctuation
+            if char in '.!?\n':
+                self._random_delay((0.3, 0.8))
+
+    def _click_message_send(self) -> bool:
+        """
+        Find and click the Send button in the messaging overlay.
+
+        Returns:
+            True if clicked successfully, False otherwise.
+        """
+        page = self.page
+        self._random_delay((0.5, 1.5))
+
+        send_selectors = [
+            'button.msg-form__send-button',
+            'button[aria-label="Send"]',
+            'button.msg-form__send-btn',
+            '.msg-form__right-actions button[type="submit"]',
+            'button:has-text("Send")',
+        ]
+
+        for selector in send_selectors:
+            try:
+                btn = page.query_selector(selector)
+                if btn and btn.is_visible() and btn.is_enabled():
+                    btn.click()
+                    self._random_delay((1, 3))
+                    return True
+            except Exception:
+                continue
+
+        # Fallback: try pressing Enter (LinkedIn sometimes sends on Enter)
+        try:
+            page.keyboard.press("Enter")
+            self._random_delay((1, 2))
+            return True
+        except Exception:
+            pass
+
+        print("[BOT]   Could not find message Send button")
+        return False
+
+    def _close_chat_modal(self):
+        """
+        Close any open chat/messaging overlay.
+        """
+        page = self.page
+        try:
+            # Try clicking the close button on the messaging overlay
+            close_selectors = [
+                'button[aria-label="Close your conversation"]',
+                'button.msg-overlay-bubble-header__control--close',
+                '.msg-overlay-conversation-bubble button[data-control-name="overlay.close_conversation_window"]',
+                'button.msg-overlay-bubble-header__control:has(svg[data-test-icon="close"])',
+            ]
+
+            for selector in close_selectors:
+                try:
+                    btn = page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        self._random_delay((0.5, 1))
+                        return
+                except Exception:
+                    continue
+
+            # Fallback: press Escape
+            page.keyboard.press("Escape")
+            self._random_delay((0.5, 1))
+
+        except Exception:
+            pass
+
+    def dry_run_message(self, url: str, message_template: Optional[str] = None) -> str:
+        """
+        Visit a profile and simulate sending a follow-up message without clicking.
+
+        Args:
+            url: LinkedIn profile URL.
+            message_template: Message with {first_name} placeholder.
+
+        Returns:
+            Status string describing what WOULD happen.
+        """
+        if message_template is None:
+            message_template = get_followup_message_template()
+
+        try:
+            profile_info = self.visit_profile(url)
+            first_name = profile_info["first_name"]
+            personalized_msg = message_template.format(first_name=first_name)
+
+            # Check if Message button is available
+            message_btn = self._find_message_button()
+
+            print(f"[DRY RUN] Profile: {profile_info['name']}")
+            print(f"[DRY RUN] Message button found: {message_btn is not None}")
+            print(f"[DRY RUN] Message: {personalized_msg[:100]}...")
+
+            if message_btn:
+                return STATUS_MESSAGED  # Would send
+            else:
+                return "not_connected"
 
         except ProfileNotFoundError:
             print(f"[DRY RUN] Profile not found (404)")
