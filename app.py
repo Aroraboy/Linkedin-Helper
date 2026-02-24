@@ -63,7 +63,10 @@ def create_app():
 
     # ─── Create tables ────────────────────────────────────────────────────
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as e:
+            print(f"[WARNING] db.create_all() failed: {e}")
 
     return app
 

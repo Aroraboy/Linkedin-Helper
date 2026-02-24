@@ -44,7 +44,8 @@ ENV DATABASE_URL=sqlite:////data/web_app.db
 ENV PYTHONUNBUFFERED=1
 ENV HEADLESS=true
 
-EXPOSE 5000
+EXPOSE ${PORT:-5000}
 
 # Use gunicorn with enough timeout for Playwright operations
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "600", "wsgi:app"]
+# Shell form so $PORT is expanded at runtime (Railway sets PORT dynamically)
+CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 4 --timeout 600 --log-level info wsgi:app
