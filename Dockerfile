@@ -45,5 +45,5 @@ ENV HEADLESS=true
 
 EXPOSE 5000
 
-# Use gunicorn — Railway overrides CMD via startCommand in railway.toml
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "600", "--log-level", "info", "wsgi:app"]
+# Use gunicorn with config file (reads PORT from env at runtime — no shell expansion needed)
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]
