@@ -8,16 +8,16 @@
 
 ## Tech Stack
 
-| Component       | Technology                          |
-| --------------- | ----------------------------------- |
-| Language        | Python 3.10+                        |
-| Browser Engine  | Playwright (Chromium, headful)      |
-| Spreadsheet I/O | `openpyxl`, `csv`, `gspread`        |
-| Database        | SQLite                              |
-| Config          | `.env` + `python-dotenv`            |
-| CLI             | `argparse` + `rich`                 |
-| Web UI          | Flask + Bootstrap 5 (dark theme)    |
-| Auth            | Flask-Login + Flask-WTF             |
+| Component       | Technology                       |
+| --------------- | -------------------------------- |
+| Language        | Python 3.10+                     |
+| Browser Engine  | Playwright (Chromium, headful)   |
+| Spreadsheet I/O | `openpyxl`, `csv`, `gspread`     |
+| Database        | SQLite                           |
+| Config          | `.env` + `python-dotenv`         |
+| CLI             | `argparse` + `rich`              |
+| Web UI          | Flask + Bootstrap 5 (dark theme) |
+| Auth            | Flask-Login + Flask-WTF          |
 
 ---
 
@@ -102,16 +102,16 @@ docker run -p 5000:5000 -e SECRET_KEY=your-secret-key linkedin-helper
 
 ### Web UI Features
 
-| Feature | Description |
-|---------|-------------|
-| **User Accounts** | Register/login — each user has isolated data |
-| **CSV Upload** | Upload a CSV with LinkedIn URLs |
-| **Job Modes** | Connect, Message, or Both |
-| **Live Progress** | Real-time progress bar + status updates |
-| **LinkedIn Session** | Paste your `state.json` in Settings |
+| Feature              | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| **User Accounts**    | Register/login — each user has isolated data      |
+| **CSV Upload**       | Upload a CSV with LinkedIn URLs                   |
+| **Job Modes**        | Connect, Message, or Both                         |
+| **Live Progress**    | Real-time progress bar + status updates           |
+| **LinkedIn Session** | Paste your `state.json` in Settings               |
 | **Custom Templates** | Edit connection note & follow-up message per user |
-| **Export Results** | Download job results as CSV |
-| **Cancel Jobs** | Stop a running job anytime |
+| **Export Results**   | Download job results as CSV                       |
+| **Cancel Jobs**      | Stop a running job anytime                        |
 
 ### How It Works
 

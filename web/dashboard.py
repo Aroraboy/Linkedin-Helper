@@ -160,7 +160,7 @@ def start(job_id):
         )
         db.session.commit()
 
-    start_job(current_app._get_current_object(), job_id)
+    start_job(current_app._get_current_object(), job_id, headless=request.form.get("browser_mode") == "headless")
     flash("Job started!", "success")
     return redirect(url_for("dashboard.job_detail", job_id=job_id))
 

@@ -18,7 +18,11 @@
     </div>
     <div class="d-flex gap-2">
         {% if job.status in ('pending', 'completed', 'failed', 'cancelled') %}
-        <form method="POST" action="{{ url_for('dashboard.start', job_id=job.id) }}">
+        <form method="POST" action="{{ url_for('dashboard.start', job_id=job.id) }}" class="d-flex gap-2 align-items-center">
+            <select name="browser_mode" class="form-select form-select-sm" style="width: auto;">
+                <option value="headed" selected>Headed (visible browser)</option>
+                <option value="headless">Headless (background)</option>
+            </select>
             <button class="btn btn-li">
                 <i class="bi bi-play-fill me-1"></i>
                 {% if job.status == 'pending' %}Start{% else %}Re-run{% endif %}

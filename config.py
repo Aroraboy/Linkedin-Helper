@@ -35,11 +35,11 @@ LONG_PAUSE_EVERY_N = 10
 LONG_PAUSE_DURATION = (60, 120)
 
 # ─── Daily Caps ──────────────────────────────────────────────────────────────
-# Maximum connection requests to send per day (LinkedIn soft-limits ~100/week)
-DAILY_CONNECTION_CAP = 20
+# Maximum connection requests to send per day (0 = unlimited)
+DAILY_CONNECTION_CAP = 0
 
-# Maximum follow-up messages to send per day
-DAILY_MESSAGE_CAP = 50
+# Maximum follow-up messages to send per day (0 = unlimited)
+DAILY_MESSAGE_CAP = 0
 
 # ─── Template Files ──────────────────────────────────────────────────────────
 CONNECTION_NOTE_TEMPLATE_FILE = TEMPLATES_DIR / "connection_note.txt"

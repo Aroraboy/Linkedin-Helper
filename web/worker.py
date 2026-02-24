@@ -21,12 +21,12 @@ from web.models import Job, JobProfile, User, db as _db
 _running_jobs: dict[int, Thread] = {}
 
 
-def start_job(app, job_id: int):
+def start_job(app, job_id: int, headless: bool = False):
     """Launch a background thread to process a job."""
     if job_id in _running_jobs and _running_jobs[job_id].is_alive():
         return  # Already running
 
-    t = Thread(target=_run_job, args=(app, job_id), daemon=True)
+    t = Thread(target=_run_job, args=(app, job_id, headless), daemon=True)
     _running_jobs[job_id] = t
     t.start()
 
@@ -37,7 +37,7 @@ def cancel_job(job_id: int):
     pass  # The worker loop checks job.status == "cancelled"
 
 
-def _run_job(app, job_id: int):
+def _run_job(app, job_id: int, headless: bool = False):
     """
     Main worker loop — runs inside a background thread.
     Uses the app context to access the database.
@@ -71,10 +71,8 @@ def _run_job(app, job_id: int):
             session_path = Path(tempfile.mktemp(suffix=".json"))
             session_path.write_text(user.linkedin_session, encoding="utf-8")
 
-            # Launch the bot — headless in production (no display), headed locally
-            import os
-            is_production = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("HEADLESS", "").lower() == "true"
-            bot = LinkedInBot(state_path=str(session_path), headless=is_production)
+            # Launch the bot — use the mode chosen by the user
+            bot = LinkedInBot(state_path=str(session_path), headless=headless)
             bot.start()
 
             if not bot.is_logged_in():
@@ -104,10 +102,17 @@ def _run_job(app, job_id: int):
 
                 try:
                     if job.mode in ("connect", "both"):
-                        # Always send without a note for connect mode
-                        result = bot.send_connection_request(
-                            profile.url, send_note=False
-                        )
+                        if job.mode == "both":
+                            # Both mode: Add a note → paste template → Send invitation
+                            note_template = user.connection_note or "Hi {first_name}, I'd love to connect!"
+                            result = bot.send_connection_request(
+                                profile.url, note_template, send_note=True
+                            )
+                        else:
+                            # Connect mode: Send without a note
+                            result = bot.send_connection_request(
+                                profile.url, send_note=False
+                            )
                         profile.status = result
                         if result == "request_sent":
                             job.sent += 1

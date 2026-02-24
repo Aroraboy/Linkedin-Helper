@@ -325,9 +325,9 @@ class Database:
         count = self.get_daily_count(counter_type)
 
         if counter_type == COUNTER_CONNECTIONS:
-            return count >= DAILY_CONNECTION_CAP
+            return DAILY_CONNECTION_CAP > 0 and count >= DAILY_CONNECTION_CAP
         elif counter_type == COUNTER_MESSAGES:
-            return count >= DAILY_MESSAGE_CAP
+            return DAILY_MESSAGE_CAP > 0 and count >= DAILY_MESSAGE_CAP
         else:
             raise ValueError(f"Invalid counter type: {counter_type}")
 
