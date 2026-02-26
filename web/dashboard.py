@@ -34,6 +34,7 @@ from web.forms import (
     UploadForm,
 )
 from web.linkedin_auth import login_to_linkedin, submit_verification_code
+from web.interactive_login import start_session, get_session, close_session
 from web.models import Job, JobProfile, User, db
 from web.worker import cancel_job, start_job
 
@@ -367,3 +368,119 @@ def linkedin_verify():
                 flash(f"{err}", "error")
 
     return redirect(url_for("dashboard.settings"))
+
+
+# ─── Interactive Browser Login ────────────────────────────────────────────────
+
+@dashboard_bp.route("/settings/interactive-login")
+@login_required
+def interactive_login_page():
+    """Render the interactive browser login page."""
+    return render_template("dashboard/interactive_login.html")
+
+
+@dashboard_bp.route("/settings/interactive-login/start", methods=["POST"])
+@login_required
+def interactive_login_start():
+    """Start an interactive browser session."""
+    from threading import Thread
+
+    def _start_in_thread(user_id):
+        start_session(user_id)
+
+    t = Thread(target=_start_in_thread, args=(current_user.id,), daemon=True)
+    t.start()
+    t.join(timeout=15)  # Wait up to 15s for browser to launch
+
+    session = get_session(current_user.id)
+    if session and session.active:
+        return jsonify({"status": "ok"})
+    elif session and session.error:
+        return jsonify({"status": "error", "error": session.error}), 500
+    else:
+        return jsonify({"status": "error", "error": "Failed to start browser"}), 500
+
+
+@dashboard_bp.route("/settings/interactive-login/screenshot")
+@login_required
+def interactive_login_screenshot():
+    """Return a screenshot of the current browser state."""
+    session = get_session(current_user.id)
+    if not session or not session.active:
+        return jsonify({"status": "inactive"}), 404
+
+    screenshot = session.screenshot()
+    url = session.get_url()
+    logged_in = session.is_logged_in()
+
+    return jsonify({
+        "status": "ok",
+        "screenshot": screenshot,
+        "url": url,
+        "logged_in": logged_in,
+    })
+
+
+@dashboard_bp.route("/settings/interactive-login/click", methods=["POST"])
+@login_required
+def interactive_login_click():
+    """Forward a mouse click to the browser."""
+    session = get_session(current_user.id)
+    if not session or not session.active:
+        return jsonify({"status": "inactive"}), 404
+
+    data = request.get_json()
+    x = int(data.get("x", 0))
+    y = int(data.get("y", 0))
+    session.click(x, y)
+    return jsonify({"status": "ok"})
+
+
+@dashboard_bp.route("/settings/interactive-login/type", methods=["POST"])
+@login_required
+def interactive_login_type():
+    """Forward keyboard input to the browser."""
+    session = get_session(current_user.id)
+    if not session or not session.active:
+        return jsonify({"status": "inactive"}), 404
+
+    data = request.get_json()
+    text = data.get("text", "")
+    key = data.get("key", "")
+
+    if key:
+        session.press_key(key)
+    elif text:
+        session.type_text(text)
+
+    return jsonify({"status": "ok"})
+
+
+@dashboard_bp.route("/settings/interactive-login/save", methods=["POST"])
+@login_required
+def interactive_login_save():
+    """Save the session after successful login and close the browser."""
+    session = get_session(current_user.id)
+    if not session or not session.active:
+        return jsonify({"status": "error", "error": "No active session"}), 404
+
+    if not session.is_logged_in():
+        return jsonify({"status": "error", "error": "Not logged in yet"}), 400
+
+    session_json = session.extract_session()
+    if not session_json:
+        return jsonify({"status": "error", "error": "Failed to extract session"}), 500
+
+    current_user.linkedin_session = session_json
+    db.session.commit()
+    close_session(current_user.id)
+
+    return jsonify({"status": "ok", "message": "LinkedIn session saved!"})
+
+
+@dashboard_bp.route("/settings/interactive-login/close", methods=["POST"])
+@login_required
+def interactive_login_close():
+    """Close the interactive browser session."""
+    close_session(current_user.id)
+    return jsonify({"status": "ok"})
