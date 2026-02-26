@@ -1,181 +1,227 @@
-{% extends "base.html" %}
-{% block title %}Settings — LinkedIn Helper{% endblock %}
-
-{% block content %}
+{% extends "base.html" %} {% block title %}Settings — LinkedIn Helper{% endblock
+%} {% block content %}
 <h3 class="mb-4"><i class="bi bi-gear me-2"></i>Settings</h3>
 
 <div class="row g-4">
-    <!-- LinkedIn Session -->
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header d-flex align-items-center">
-                <i class="bi bi-linkedin me-2"></i>LinkedIn Connection
-                {% if current_user.has_linkedin_session() %}
-                    <span class="badge bg-success ms-2">Connected</span>
-                {% else %}
-                    <span class="badge bg-danger ms-2">Not Connected</span>
-                {% endif %}
+  <!-- LinkedIn Session -->
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header d-flex align-items-center">
+        <i class="bi bi-linkedin me-2"></i>LinkedIn Connection {% if
+        current_user.has_linkedin_session() %}
+        <span class="badge bg-success ms-2">Connected</span>
+        {% else %}
+        <span class="badge bg-danger ms-2">Not Connected</span>
+        {% endif %}
+      </div>
+      <div class="card-body p-4">
+        <!-- Tabs -->
+        <ul class="nav nav-pills nav-fill mb-3" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button
+              class="nav-link {% if not request.args.get('verify') %}active{% endif %}"
+              id="credentials-tab"
+              data-bs-toggle="pill"
+              data-bs-target="#credentials-pane"
+              type="button"
+              role="tab"
+              aria-selected="{% if not request.args.get('verify') %}true{% else %}false{% endif %}"
+            >
+              <i class="bi bi-person-lock me-1"></i>Login with Credentials
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button
+              class="nav-link"
+              id="manual-tab"
+              data-bs-toggle="pill"
+              data-bs-target="#manual-pane"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              <i class="bi bi-code-square me-1"></i>Paste state.json
+            </button>
+          </li>
+        </ul>
+
+        <div class="tab-content">
+          <!-- Tab 1: Login with Credentials -->
+          <div
+            class="tab-pane fade {% if not request.args.get('verify') %}show active{% endif %}"
+            id="credentials-pane"
+            role="tabpanel"
+          >
+            {% if request.args.get('verify') %}
+            <!-- Verification Code Step -->
+            <div
+              class="alert alert-warning py-2 mb-3"
+              style="font-size: 0.85rem"
+            >
+              <i class="bi bi-shield-lock me-1"></i>
+              LinkedIn is asking for verification. See the screenshot below to
+              know what's required.
             </div>
-            <div class="card-body p-4">
-                <!-- Tabs -->
-                <ul class="nav nav-pills nav-fill mb-3" role="tablist">
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link {% if not request.args.get('verify') %}active{% endif %}"
-                                id="credentials-tab" data-bs-toggle="pill"
-                                data-bs-target="#credentials-pane" type="button"
-                                role="tab" aria-selected="{% if not request.args.get('verify') %}true{% else %}false{% endif %}">
-                            <i class="bi bi-person-lock me-1"></i>Login with Credentials
-                        </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link" id="manual-tab" data-bs-toggle="pill"
-                                data-bs-target="#manual-pane" type="button"
-                                role="tab" aria-selected="false">
-                            <i class="bi bi-code-square me-1"></i>Paste state.json
-                        </button>
-                    </li>
-                </ul>
-
-                <div class="tab-content">
-                    <!-- Tab 1: Login with Credentials -->
-                    <div class="tab-pane fade {% if not request.args.get('verify') %}show active{% endif %}"
-                         id="credentials-pane" role="tabpanel">
-
-                        {% if request.args.get('verify') %}
-                            <!-- Verification Code Step -->
-                            <div class="alert alert-warning py-2 mb-3" style="font-size: 0.85rem;">
-                                <i class="bi bi-shield-lock me-1"></i>
-                                LinkedIn is asking for verification. See the screenshot below to know what's required.
-                            </div>
-                            {% if session.get('li_screenshot_ready') %}
-                            <div class="mb-3 text-center">
-                                <p class="text-muted small mb-1">What LinkedIn is showing:</p>
-                                <img src="{{ url_for('static', filename='screenshots/challenge_' ~ current_user.id ~ '.png') }}?t={{ range(99999) | random }}"
-                                     alt="LinkedIn challenge page"
-                                     class="img-fluid rounded border"
-                                     style="max-height: 300px;">
-                            </div>
-                            {% endif %}
-                            <form method="POST" action="{{ url_for('dashboard.linkedin_verify') }}">
-                                {{ verify_form.hidden_tag() }}
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">Verification Code</label>
-                                    {{ verify_form.verification_code(class="form-control form-control-lg text-center",
-                                       placeholder="Enter code", maxlength=10, autofocus=true,
-                                       style="letter-spacing: 0.3em; font-size: 1.3rem;") }}
-                                    {% for error in verify_form.verification_code.errors %}
-                                        <small class="text-danger d-block">{{ error }}</small>
-                                    {% endfor %}
-                                </div>
-                                <div class="d-grid gap-2">
-                                    <button type="submit" class="btn btn-li">
-                                        <i class="bi bi-check-circle me-1"></i>Verify & Connect
-                                    </button>
-                                    <a href="{{ url_for('dashboard.settings') }}" class="btn btn-outline-secondary btn-sm">
-                                        <i class="bi bi-arrow-left me-1"></i>Start Over
-                                    </a>
-                                </div>
-                            </form>
-                        {% else %}
-                            <!-- Login Credentials Step -->
-                            <div class="alert alert-info py-2 mb-3" style="font-size: 0.85rem;">
-                                <i class="bi bi-info-circle me-1"></i>
-                                Enter your LinkedIn email and password. The app will log in securely and save the session.
-                                Your password is <strong>never stored</strong>.
-                            </div>
-                            <form method="POST" action="{{ url_for('dashboard.linkedin_login') }}" id="loginForm">
-                                {{ login_form.hidden_tag() }}
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">LinkedIn Email</label>
-                                    {{ login_form.li_email(class="form-control", placeholder="you@example.com", autofocus=true) }}
-                                    {% for error in login_form.li_email.errors %}
-                                        <small class="text-danger d-block">{{ error }}</small>
-                                    {% endfor %}
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">LinkedIn Password</label>
-                                    {{ login_form.li_password(class="form-control", placeholder="••••••••") }}
-                                    {% for error in login_form.li_password.errors %}
-                                        <small class="text-danger d-block">{{ error }}</small>
-                                    {% endfor %}
-                                </div>
-                                <button type="submit" class="btn btn-li w-100" id="loginBtn">
-                                    <i class="bi bi-box-arrow-in-right me-1"></i>Log in to LinkedIn
-                                </button>
-                            </form>
-                            <script>
-                                document.getElementById('loginForm').addEventListener('submit', function() {
-                                    const btn = document.getElementById('loginBtn');
-                                    btn.disabled = true;
-                                    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Logging in...';
-                                });
-                            </script>
-                        {% endif %}
-                    </div>
-
-                    <!-- Tab 2: Manual Paste state.json -->
-                    <div class="tab-pane fade" id="manual-pane" role="tabpanel">
-                        <div class="alert alert-secondary py-2 mb-3" style="font-size: 0.85rem;">
-                            <i class="bi bi-terminal me-1"></i>
-                            <strong>Advanced:</strong> If you already have a <code>state.json</code> file from the CLI tool, paste its contents below.
-                        </div>
-                        <form method="POST">
-                            {{ session_form.hidden_tag() }}
-                            <input type="hidden" name="action" value="save_session">
-                            <div class="mb-3">
-                                <label class="form-label">state.json Contents</label>
-                                {{ session_form.session_json(class="form-control", rows=8,
-                                   placeholder='Paste the entire contents of state.json here...',
-                                   style="font-family: monospace; font-size: 0.8rem;") }}
-                                {% for error in session_form.session_json.errors %}
-                                    <small class="text-danger">{{ error }}</small>
-                                {% endfor %}
-                            </div>
-                            <button type="submit" class="btn btn-li">
-                                <i class="bi bi-save me-1"></i>Save Session
-                            </button>
-                        </form>
-                    </div>
-                </div>
+            {% if session.get('li_screenshot_ready') %}
+            <div class="mb-3 text-center">
+              <p class="text-muted small mb-1">What LinkedIn is showing:</p>
+              <img
+                src="{{ url_for('static', filename='screenshots/challenge_' ~ current_user.id ~ '.png') }}?t={{ range(99999) | random }}"
+                alt="LinkedIn challenge page"
+                class="img-fluid rounded border"
+                style="max-height: 300px"
+              />
             </div>
+            {% endif %}
+            <form
+              method="POST"
+              action="{{ url_for('dashboard.linkedin_verify') }}"
+            >
+              {{ verify_form.hidden_tag() }}
+              <div class="mb-3">
+                <label class="form-label fw-bold">Verification Code</label>
+                {{ verify_form.verification_code(class="form-control
+                form-control-lg text-center", placeholder="Enter code",
+                maxlength=10, autofocus=true, style="letter-spacing: 0.3em;
+                font-size: 1.3rem;") }} {% for error in
+                verify_form.verification_code.errors %}
+                <small class="text-danger d-block">{{ error }}</small>
+                {% endfor %}
+              </div>
+              <div class="d-grid gap-2">
+                <button type="submit" class="btn btn-li">
+                  <i class="bi bi-check-circle me-1"></i>Verify & Connect
+                </button>
+                <a
+                  href="{{ url_for('dashboard.settings') }}"
+                  class="btn btn-outline-secondary btn-sm"
+                >
+                  <i class="bi bi-arrow-left me-1"></i>Start Over
+                </a>
+              </div>
+            </form>
+            {% else %}
+            <!-- Login Credentials Step -->
+            <div class="alert alert-info py-2 mb-3" style="font-size: 0.85rem">
+              <i class="bi bi-info-circle me-1"></i>
+              Enter your LinkedIn email and password. The app will log in
+              securely and save the session. Your password is
+              <strong>never stored</strong>.
+            </div>
+            <form
+              method="POST"
+              action="{{ url_for('dashboard.linkedin_login') }}"
+              id="loginForm"
+            >
+              {{ login_form.hidden_tag() }}
+              <div class="mb-3">
+                <label class="form-label fw-bold">LinkedIn Email</label>
+                {{ login_form.li_email(class="form-control",
+                placeholder="you@example.com", autofocus=true) }} {% for error
+                in login_form.li_email.errors %}
+                <small class="text-danger d-block">{{ error }}</small>
+                {% endfor %}
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">LinkedIn Password</label>
+                {{ login_form.li_password(class="form-control",
+                placeholder="••••••••") }} {% for error in
+                login_form.li_password.errors %}
+                <small class="text-danger d-block">{{ error }}</small>
+                {% endfor %}
+              </div>
+              <button type="submit" class="btn btn-li w-100" id="loginBtn">
+                <i class="bi bi-box-arrow-in-right me-1"></i>Log in to LinkedIn
+              </button>
+            </form>
+            <script>
+              document
+                .getElementById("loginForm")
+                .addEventListener("submit", function () {
+                  const btn = document.getElementById("loginBtn");
+                  btn.disabled = true;
+                  btn.innerHTML =
+                    '<span class="spinner-border spinner-border-sm me-1"></span>Logging in...';
+                });
+            </script>
+            {% endif %}
+          </div>
+
+          <!-- Tab 2: Manual Paste state.json -->
+          <div class="tab-pane fade" id="manual-pane" role="tabpanel">
+            <div
+              class="alert alert-secondary py-2 mb-3"
+              style="font-size: 0.85rem"
+            >
+              <i class="bi bi-terminal me-1"></i>
+              <strong>Advanced:</strong> If you already have a
+              <code>state.json</code> file from the CLI tool, paste its contents
+              below.
+            </div>
+            <form method="POST">
+              {{ session_form.hidden_tag() }}
+              <input type="hidden" name="action" value="save_session" />
+              <div class="mb-3">
+                <label class="form-label">state.json Contents</label>
+                {{ session_form.session_json(class="form-control", rows=8,
+                placeholder='Paste the entire contents of state.json here...',
+                style="font-family: monospace; font-size: 0.8rem;") }} {% for
+                error in session_form.session_json.errors %}
+                <small class="text-danger">{{ error }}</small>
+                {% endfor %}
+              </div>
+              <button type="submit" class="btn btn-li">
+                <i class="bi bi-save me-1"></i>Save Session
+              </button>
+            </form>
+          </div>
         </div>
+      </div>
     </div>
+  </div>
 
-    <!-- Message Templates -->
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <i class="bi bi-chat-square-text me-2"></i>Message Templates
-            </div>
-            <div class="card-body p-4">
-                <form method="POST">
-                    {{ settings_form.hidden_tag() }}
-                    <input type="hidden" name="action" value="save_templates">
+  <!-- Message Templates -->
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-chat-square-text me-2"></i>Message Templates
+      </div>
+      <div class="card-body p-4">
+        <form method="POST">
+          {{ settings_form.hidden_tag() }}
+          <input type="hidden" name="action" value="save_templates" />
 
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Connection Note</label>
-                        {{ settings_form.connection_note(class="form-control", rows=4, placeholder="Hi {first_name}, I'd love to connect!") }}
-                        <small class="text-muted">Use <code>{first_name}</code> as placeholder. Max 300 chars.</small>
-                        {% for error in settings_form.connection_note.errors %}
-                            <small class="text-danger d-block">{{ error }}</small>
-                        {% endfor %}
-                    </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">Connection Note</label>
+            {{ settings_form.connection_note(class="form-control", rows=4,
+            placeholder="Hi {first_name}, I'd love to connect!") }}
+            <small class="text-muted"
+              >Use <code>{first_name}</code> as placeholder. Max 300
+              chars.</small
+            >
+            {% for error in settings_form.connection_note.errors %}
+            <small class="text-danger d-block">{{ error }}</small>
+            {% endfor %}
+          </div>
 
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Follow-up Message</label>
-                        {{ settings_form.followup_message(class="form-control", rows=4, placeholder="Thanks for connecting, {first_name}!") }}
-                        <small class="text-muted">Use <code>{first_name}</code> as placeholder.</small>
-                        {% for error in settings_form.followup_message.errors %}
-                            <small class="text-danger d-block">{{ error }}</small>
-                        {% endfor %}
-                    </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">Follow-up Message</label>
+            {{ settings_form.followup_message(class="form-control", rows=4,
+            placeholder="Thanks for connecting, {first_name}!") }}
+            <small class="text-muted"
+              >Use <code>{first_name}</code> as placeholder.</small
+            >
+            {% for error in settings_form.followup_message.errors %}
+            <small class="text-danger d-block">{{ error }}</small>
+            {% endfor %}
+          </div>
 
-                    <button type="submit" class="btn btn-li">
-                        <i class="bi bi-save me-1"></i>Save Templates
-                    </button>
-                </form>
-            </div>
-        </div>
+          <button type="submit" class="btn btn-li">
+            <i class="bi bi-save me-1"></i>Save Templates
+          </button>
+        </form>
+      </div>
     </div>
+  </div>
 </div>
 {% endblock %}
