@@ -139,16 +139,22 @@ echo "[6/6] Copying Playwright Chromium browser..."
 BROWSERS_DEST="$PYTHON_DIST/playwright_browsers"
 mkdir -p "$BROWSERS_DEST"
 
-# Copy only Chromium (not Firefox/WebKit) to save space
+# Copy ALL chromium-related dirs (chromium, headless_shell, ffmpeg) — not Firefox/WebKit
 if [ -d "$PLAYWRIGHT_BROWSERS" ]; then
-    CHROMIUM_DIR=$(find "$PLAYWRIGHT_BROWSERS" -maxdepth 1 -type d -name "chromium-*" | head -1)
-    if [ -n "$CHROMIUM_DIR" ]; then
-        echo "   Copying Chromium from: $CHROMIUM_DIR"
-        cp -R "$CHROMIUM_DIR" "$BROWSERS_DEST/"
-        echo "   Chromium copied successfully"
-    else
-        echo "   WARNING: Chromium directory not found in $PLAYWRIGHT_BROWSERS"
+    COPIED=0
+    for dir in "$PLAYWRIGHT_BROWSERS"/chromium*/ "$PLAYWRIGHT_BROWSERS"/ffmpeg*/; do
+        if [ -d "$dir" ]; then
+            echo "   Copying: $(basename $dir)"
+            cp -R "$dir" "$BROWSERS_DEST/"
+            COPIED=$((COPIED + 1))
+        fi
+    done
+    if [ $COPIED -eq 0 ]; then
+        echo "   WARNING: No chromium directories found in $PLAYWRIGHT_BROWSERS"
         ls -la "$PLAYWRIGHT_BROWSERS" || true
+    else
+        echo "   Copied $COPIED browser directories"
+        ls -la "$BROWSERS_DEST/"
     fi
 else
     echo "   WARNING: Playwright browsers directory not found"

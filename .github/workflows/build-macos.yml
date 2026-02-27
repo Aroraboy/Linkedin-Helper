@@ -191,11 +191,15 @@ jobs:
           DEST="electron/python_dist/playwright_browsers"
           mkdir -p "$DEST"
           if [ -n "$PW_BROWSERS" ] && [ -d "$PW_BROWSERS" ]; then
-            CHROMIUM_DIR=$(find "$PW_BROWSERS" -maxdepth 1 -type d -name "chromium-*" | head -1)
-            if [ -n "$CHROMIUM_DIR" ]; then
-              cp -R "$CHROMIUM_DIR" "$DEST/"
-              echo "Copied Chromium. Size: $(du -sh "$DEST" | cut -f1)"
-            fi
+            # Copy ALL chromium-related dirs (chromium, headless_shell, ffmpeg)
+            for dir in "$PW_BROWSERS"/chromium*/ "$PW_BROWSERS"/ffmpeg*/; do
+              if [ -d "$dir" ]; then
+                echo "Copying: $(basename $dir)"
+                cp -R "$dir" "$DEST/"
+              fi
+            done
+            echo "Total browsers size: $(du -sh "$DEST" | cut -f1)"
+            ls -la "$DEST/"
           fi
 
       # ─── Copy Playwright Chromium (Windows) ────────────────────────────
@@ -207,11 +211,14 @@ jobs:
           $DEST = "electron\python_dist\playwright_browsers"
           New-Item -ItemType Directory -Force -Path $DEST | Out-Null
           if ($PW_BROWSERS -and (Test-Path $PW_BROWSERS)) {
-            $chromiumDir = Get-ChildItem -Path $PW_BROWSERS -Directory -Filter "chromium-*" | Select-Object -First 1
-            if ($chromiumDir) {
-              Copy-Item -Recurse -Force $chromiumDir.FullName -Destination "$DEST\"
-              Write-Host "Copied Chromium from $($chromiumDir.FullName)"
+            # Copy ALL chromium-related dirs (chromium, headless_shell, ffmpeg)
+            $dirs = Get-ChildItem -Path $PW_BROWSERS -Directory | Where-Object { $_.Name -match '^(chromium|ffmpeg)' }
+            foreach ($dir in $dirs) {
+              Write-Host "Copying: $($dir.Name)"
+              Copy-Item -Recurse -Force $dir.FullName -Destination "$DEST\"
             }
+            Write-Host "Copied directories:"
+            Get-ChildItem -Path $DEST -Directory | ForEach-Object { Write-Host "  $($_.Name)" }
           }
 
       # ─── Verify ───────────────────────────────────────────────────────
@@ -292,5 +299,6 @@ jobs:
             electron/dist/*.exe
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
