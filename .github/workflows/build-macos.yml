@@ -6,13 +6,16 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
+          - os: macos-14
             arch: x64
             platform: mac
           - os: macos-latest

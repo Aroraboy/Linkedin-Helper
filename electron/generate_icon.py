@@ -73,11 +73,23 @@ def create_icon():
     img.save(png_path, "PNG")
     print(f"Saved: {png_path}")
     
+    # Create .ico for Windows (always — works on all platforms)
+    create_ico(img)
+    
     # On macOS, also create .icns
     if sys.platform == "darwin":
         create_icns(png_path)
     
     return png_path
+
+def create_ico(img):
+    """Create .ico file for Windows."""
+    ico_path = os.path.join(ICONS_DIR, "icon.ico")
+    # ICO supports multiple sizes embedded
+    ico_sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    img.save(ico_path, format="ICO", sizes=ico_sizes)
+    print(f"Saved: {ico_path}")
+
 
 def create_icns(png_path):
     """Convert PNG to .icns on macOS."""
