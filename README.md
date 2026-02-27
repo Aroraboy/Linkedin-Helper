@@ -59,6 +59,15 @@ Linkedin-help/
 │   ├── connection_note.txt  # Template for connection request note
 │   └── followup_message.txt # Template for follow-up message
 ├── logs/                    # Daily log files (GIT-IGNORED)
+├── electron/                # Electron desktop app for macOS
+│   ├── main.js              # Electron main process
+│   ├── preload.js           # Secure IPC bridge
+│   ├── package.json         # Electron + electron-builder config
+│   ├── build_all.sh         # One-command full build
+│   ├── build_python.sh      # Python bundling with PyInstaller
+│   ├── pyinstaller_entry.py # PyInstaller entry point
+│   ├── generate_icon.py     # App icon generator
+│   └── icons/               # macOS app icons
 └── tests/
     ├── test_spreadsheet.py  # Unit tests for reader
     ├── test_db.py           # Unit tests for database
@@ -67,6 +76,30 @@ Linkedin-help/
     ├── test_main.py         # Unit tests for CLI & export
     └── sample_urls.csv      # Sample data for testing
 ```
+
+---
+
+## Desktop App (macOS)
+
+A standalone Electron desktop app that bundles everything — no Python/Node.js installation needed.
+
+### Build the .dmg installer
+
+> Requires macOS with Python 3.10+ and Node.js 18+ for building.
+
+```bash
+cd electron
+chmod +x build_all.sh build_python.sh
+./build_all.sh
+```
+
+The .dmg will be in `electron/dist/`. See [BUILD_ELECTRON.md](BUILD_ELECTRON.md) for full instructions.
+
+### Install & Run
+
+1. Double-click the `.dmg` file
+2. Drag **LinkedIn Helper** to Applications
+3. Open from Applications (right-click → Open if macOS blocks it)
 
 ---
 

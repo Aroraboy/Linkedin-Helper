@@ -1,0 +1,78 @@
+{
+  "name": "linkedin-helper",
+  "version": "1.0.0",
+  "description": "LinkedIn Helper — Automate connection requests and messaging",
+  "main": "main.js",
+  "author": "LinkedIn Helper Team",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build:python": "bash build_python.sh",
+    "build:electron": "electron-builder --mac",
+    "build": "bash build_all.sh",
+    "dist": "electron-builder --mac --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.linkedinhelper.app",
+    "productName": "LinkedIn Helper",
+    "copyright": "Copyright © 2024 LinkedIn Helper",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "icons/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null
+    },
+    "dmg": {
+      "title": "LinkedIn Helper",
+      "iconSize": 80,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icons/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "python_dist/linkedin_helper",
+        "to": "python_app",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "python_dist/playwright_browsers",
+        "to": "playwright_browsers",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": false
+  }
+}

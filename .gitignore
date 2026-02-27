@@ -33,6 +33,17 @@ env/
 # Logs
 logs/
 
+# Electron build artifacts
+electron/python_dist/
+electron/dist/
+electron/node_modules/
+electron/icons/icon.icns
+electron/icons/icon.png
+electron/icons/icon.iconset/
+
+# Build venv (used by build_python.sh)
+.build_venv/
+
 # OS
 Thumbs.db
 .DS_Store
