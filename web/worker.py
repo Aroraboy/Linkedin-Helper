@@ -103,7 +103,7 @@ def _run_job(app, job_id: int, headless: bool = False):
                 try:
                     if job.mode in ("connect", "both"):
                         if job.mode == "both":
-                            # Both mode: Add a note → paste template → Send invitation
+                            # Both mode: Connect + Add a note → paste template → Send invitation
                             note_template = user.connection_note or "Hi {first_name}, I'd love to connect!"
                             result = bot.send_connection_request(
                                 profile.url, note_template, send_note=True
@@ -116,32 +116,27 @@ def _run_job(app, job_id: int, headless: bool = False):
                         profile.status = result
                         if result == "request_sent":
                             job.sent += 1
-                        elif result in ("already_connected", "already_pending"):
-                            job.skipped += 1
-                        elif result == "skipped":
-                            job.skipped += 1
                         elif result == "cap_reached":
                             job.live_status = "LinkedIn weekly cap reached. Stopping."
                             profile.status = "skipped"
                             job.skipped += 1
                             _db.session.commit()
                             break
+                        elif result in ("already_connected", "already_pending", "skipped"):
+                            job.skipped += 1
                         else:
                             job.errors += 1
 
-                    if job.mode in ("message", "both"):
-                        if job.mode == "both" and profile.status != "already_connected":
-                            pass  # Skip messaging if not connected
+                    if job.mode == "message":
+                        msg_template = user.followup_message or "Thanks for connecting, {first_name}!"
+                        msg_result = bot.send_followup_message(profile.url, msg_template)
+                        profile.status = msg_result
+                        if msg_result == "messaged":
+                            job.sent += 1
+                        elif msg_result == "error":
+                            job.errors += 1
                         else:
-                            msg_template = user.followup_message or "Thanks for connecting, {first_name}!"
-                            result = bot.send_followup_message(profile.url, msg_template)
-                            profile.status = result
-                            if result == "messaged":
-                                job.sent += 1
-                            elif result == "error":
-                                job.errors += 1
-                            else:
-                                job.skipped += 1
+                            job.skipped += 1
 
                 except LinkedInCapReachedError:
                     profile.status = "skipped"
