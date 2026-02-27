@@ -24,17 +24,14 @@
       "category": "public.app-category.productivity",
       "icon": "icons/icon.icns",
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
-        }
+        "dmg",
+        "zip"
       ],
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "entitlements": null,
-      "entitlementsInherit": null
+      "entitlementsInherit": null,
+      "identity": null
     },
     "dmg": {
       "title": "LinkedIn Helper",
