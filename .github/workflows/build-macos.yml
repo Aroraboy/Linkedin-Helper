@@ -1,91 +1,97 @@
-name: Build macOS Desktop App
+name: Build Desktop App
 
 on:
   push:
     tags:
-      - 'v*'  # Trigger on version tags like v1.0.0
-  workflow_dispatch:  # Also allow manual trigger from GitHub UI
+      - "v*"
+  workflow_dispatch:
 
 jobs:
-  build-macos:
+  build:
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-13      # Intel (x64)
+          - os: macos-13
             arch: x64
-          - os: macos-latest  # Apple Silicon (arm64)
+            platform: mac
+          - os: macos-latest
             arch: arm64
+            platform: mac
+          - os: windows-latest
+            arch: x64
+            platform: win
+
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
-      # ─── Checkout code ─────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ─── Set up Python ─────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      # ─── Set up Node.js ────────────────────────────────────────────────
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      # ─── Install Python dependencies ───────────────────────────────────
+      # ─── Python deps ──────────────────────────────────────────────────
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ─── Install Playwright Chromium ───────────────────────────────────
       - name: Install Playwright Chromium
-        run: |
-          python -m playwright install chromium
-          python -m playwright install-deps chromium
+        run: python -m playwright install chromium
 
-      # ─── Find Playwright browsers path ────────────────────────────────
-      - name: Find Playwright browsers
-        id: pw_browsers
+      - name: Install Playwright system deps (macOS)
+        if: matrix.platform == 'mac'
+        run: python -m playwright install-deps chromium
+
+      # ─── Find Playwright browsers (macOS) ─────────────────────────────
+      - name: Find Playwright browsers (macOS)
+        if: matrix.platform == 'mac'
+        id: pw_mac
         run: |
-          # Try multiple known locations
           PW_PATH=$(python -c "
-          import subprocess, os, json
-          result = subprocess.run(['python', '-c', 'import playwright; print(os.path.dirname(playwright.__file__))'], capture_output=True, text=True)
-          pw_dir = result.stdout.strip()
-          # Check local-browsers inside driver
-          local_browsers = os.path.join(pw_dir, 'driver', 'package', '.local-browsers')
-          if os.path.isdir(local_browsers):
-              print(local_browsers)
-          else:
-              # Fallback to system cache
-              home = os.path.expanduser('~')
-              cache_path = os.path.join(home, 'Library', 'Caches', 'ms-playwright')
-              if os.path.isdir(cache_path):
-                  print(cache_path)
-              else:
-                  print('')
-          " 2>/dev/null)
+          import os
+          pw_dir = os.path.dirname(__import__('playwright').__file__)
+          local = os.path.join(pw_dir, 'driver', 'package', '.local-browsers')
+          cache = os.path.join(os.path.expanduser('~'), 'Library', 'Caches', 'ms-playwright')
+          print(local if os.path.isdir(local) else (cache if os.path.isdir(cache) else ''))
+          ")
           echo "path=$PW_PATH" >> $GITHUB_OUTPUT
-          echo "Playwright browsers at: $PW_PATH"
-          if [ -n "$PW_PATH" ]; then
-            ls -la "$PW_PATH" || true
-          fi
+          echo "Playwright browsers: $PW_PATH"
 
-      # ─── Bundle Python with PyInstaller ────────────────────────────────
-      - name: Bundle Python backend
+      # ─── Find Playwright browsers (Windows) ───────────────────────────
+      - name: Find Playwright browsers (Windows)
+        if: matrix.platform == 'win'
+        id: pw_win
+        shell: pwsh
+        run: |
+          $pw_dir = python -c "import os; print(os.path.dirname(__import__('playwright').__file__))"
+          $local = Join-Path $pw_dir "driver\package\.local-browsers"
+          $cache = Join-Path $env:LOCALAPPDATA "ms-playwright"
+          if (Test-Path $local) { $result = $local }
+          elseif (Test-Path $cache) { $result = $cache }
+          else { $result = "" }
+          echo "path=$result" >> $env:GITHUB_OUTPUT
+          Write-Host "Playwright browsers: $result"
+
+      # ─── PyInstaller (macOS) ───────────────────────────────────────────
+      - name: Bundle Python backend (macOS)
+        if: matrix.platform == 'mac'
         run: |
           pyinstaller \
             --name linkedin_helper \
             --distpath electron/python_dist \
             --workpath build/pyinstaller \
-            --noconfirm \
-            --log-level WARN \
-            \
+            --noconfirm --log-level WARN \
             --add-data "web/templates:web/templates" \
             --add-data "web/static:web/static" \
             --add-data "templates:templates" \
@@ -104,122 +110,155 @@ jobs:
             --add-data "web/linkedin_auth.py:web" \
             --add-data "web/interactive_login.py:web" \
             --add-data "requirements.txt:." \
-            \
-            --hidden-import flask \
-            --hidden-import flask_login \
-            --hidden-import flask_sqlalchemy \
-            --hidden-import flask_wtf \
-            --hidden-import wtforms \
-            --hidden-import email_validator \
-            --hidden-import sqlalchemy \
-            --hidden-import "sqlalchemy.dialects.sqlite" \
-            --hidden-import playwright \
-            --hidden-import playwright.sync_api \
-            --hidden-import openpyxl \
-            --hidden-import gspread \
-            --hidden-import google.auth \
-            --hidden-import rich \
-            --hidden-import dotenv \
-            --hidden-import jinja2 \
-            --hidden-import markupsafe \
-            --hidden-import werkzeug \
-            --hidden-import click \
-            --hidden-import itsdangerous \
-            --hidden-import blinker \
-            --hidden-import greenlet \
-            --hidden-import app \
-            --hidden-import config \
-            --hidden-import db \
-            --hidden-import logger \
-            --hidden-import linkedin_bot \
-            --hidden-import spreadsheet_reader \
-            --hidden-import web \
-            --hidden-import web.models \
-            --hidden-import web.auth \
-            --hidden-import web.dashboard \
-            --hidden-import web.forms \
-            --hidden-import web.worker \
-            --hidden-import web.linkedin_auth \
-            --hidden-import web.interactive_login \
-            \
+            --hidden-import flask --hidden-import flask_login \
+            --hidden-import flask_sqlalchemy --hidden-import flask_wtf \
+            --hidden-import wtforms --hidden-import email_validator \
+            --hidden-import sqlalchemy --hidden-import "sqlalchemy.dialects.sqlite" \
+            --hidden-import playwright --hidden-import playwright.sync_api \
+            --hidden-import openpyxl --hidden-import gspread \
+            --hidden-import google.auth --hidden-import rich \
+            --hidden-import dotenv --hidden-import jinja2 \
+            --hidden-import markupsafe --hidden-import werkzeug \
+            --hidden-import click --hidden-import itsdangerous \
+            --hidden-import blinker --hidden-import greenlet \
+            --hidden-import app --hidden-import config \
+            --hidden-import db --hidden-import logger \
+            --hidden-import linkedin_bot --hidden-import spreadsheet_reader \
+            --hidden-import web --hidden-import web.models \
+            --hidden-import web.auth --hidden-import web.dashboard \
+            --hidden-import web.forms --hidden-import web.worker \
+            --hidden-import web.linkedin_auth --hidden-import web.interactive_login \
             --collect-all playwright \
-            \
             electron/pyinstaller_entry.py
 
-      # ─── Copy Playwright Chromium into bundle ──────────────────────────
-      - name: Copy Playwright Chromium browser
+      # ─── PyInstaller (Windows) ─────────────────────────────────────────
+      - name: Bundle Python backend (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
         run: |
-          PW_BROWSERS="${{ steps.pw_browsers.outputs.path }}"
+          pyinstaller `
+            --name linkedin_helper `
+            --distpath electron/python_dist `
+            --workpath build/pyinstaller `
+            --noconfirm --log-level WARN `
+            --add-data "web/templates;web/templates" `
+            --add-data "web/static;web/static" `
+            --add-data "templates;templates" `
+            --add-data "config.py;." `
+            --add-data "app.py;." `
+            --add-data "db.py;." `
+            --add-data "logger.py;." `
+            --add-data "linkedin_bot.py;." `
+            --add-data "spreadsheet_reader.py;." `
+            --add-data "web/__init__.py;web" `
+            --add-data "web/models.py;web" `
+            --add-data "web/auth.py;web" `
+            --add-data "web/dashboard.py;web" `
+            --add-data "web/forms.py;web" `
+            --add-data "web/worker.py;web" `
+            --add-data "web/linkedin_auth.py;web" `
+            --add-data "web/interactive_login.py;web" `
+            --add-data "requirements.txt;." `
+            --hidden-import flask --hidden-import flask_login `
+            --hidden-import flask_sqlalchemy --hidden-import flask_wtf `
+            --hidden-import wtforms --hidden-import email_validator `
+            --hidden-import sqlalchemy --hidden-import "sqlalchemy.dialects.sqlite" `
+            --hidden-import playwright --hidden-import playwright.sync_api `
+            --hidden-import openpyxl --hidden-import gspread `
+            --hidden-import google.auth --hidden-import rich `
+            --hidden-import dotenv --hidden-import jinja2 `
+            --hidden-import markupsafe --hidden-import werkzeug `
+            --hidden-import click --hidden-import itsdangerous `
+            --hidden-import blinker --hidden-import greenlet `
+            --hidden-import app --hidden-import config `
+            --hidden-import db --hidden-import logger `
+            --hidden-import linkedin_bot --hidden-import spreadsheet_reader `
+            --hidden-import web --hidden-import web.models `
+            --hidden-import web.auth --hidden-import web.dashboard `
+            --hidden-import web.forms --hidden-import web.worker `
+            --hidden-import web.linkedin_auth --hidden-import web.interactive_login `
+            --collect-all playwright `
+            electron/pyinstaller_entry.py
+
+      # ─── Copy Playwright Chromium (macOS) ──────────────────────────────
+      - name: Copy Playwright Chromium (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          PW_BROWSERS="${{ steps.pw_mac.outputs.path }}"
           DEST="electron/python_dist/playwright_browsers"
           mkdir -p "$DEST"
-          
           if [ -n "$PW_BROWSERS" ] && [ -d "$PW_BROWSERS" ]; then
             CHROMIUM_DIR=$(find "$PW_BROWSERS" -maxdepth 1 -type d -name "chromium-*" | head -1)
             if [ -n "$CHROMIUM_DIR" ]; then
-              echo "Copying Chromium from: $CHROMIUM_DIR"
               cp -R "$CHROMIUM_DIR" "$DEST/"
-              echo "Done. Size:"
-              du -sh "$DEST"
-            else
-              echo "WARNING: chromium-* directory not found. Contents of $PW_BROWSERS:"
-              ls -la "$PW_BROWSERS"
+              echo "Copied Chromium. Size: $(du -sh "$DEST" | cut -f1)"
             fi
-          else
-            echo "WARNING: Playwright browsers path empty or missing"
           fi
 
-      # ─── Verify Python bundle ──────────────────────────────────────────
-      - name: Verify Python bundle
+      # ─── Copy Playwright Chromium (Windows) ────────────────────────────
+      - name: Copy Playwright Chromium (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
         run: |
-          echo "Python bundle contents:"
-          ls -la electron/python_dist/linkedin_helper/ | head -20
-          echo ""
-          echo "Bundle size:"
-          du -sh electron/python_dist/linkedin_helper/
-          echo ""
-          echo "Playwright browsers:"
-          ls -la electron/python_dist/playwright_browsers/ || echo "(empty)"
+          $PW_BROWSERS = "${{ steps.pw_win.outputs.path }}"
+          $DEST = "electron\python_dist\playwright_browsers"
+          New-Item -ItemType Directory -Force -Path $DEST | Out-Null
+          if ($PW_BROWSERS -and (Test-Path $PW_BROWSERS)) {
+            $chromiumDir = Get-ChildItem -Path $PW_BROWSERS -Directory -Filter "chromium-*" | Select-Object -First 1
+            if ($chromiumDir) {
+              Copy-Item -Recurse -Force $chromiumDir.FullName -Destination "$DEST\"
+              Write-Host "Copied Chromium from $($chromiumDir.FullName)"
+            }
+          }
 
-      # ─── Install Electron dependencies ─────────────────────────────────
+      # ─── Verify ───────────────────────────────────────────────────────
+      - name: Verify Python bundle
+        shell: bash
+        run: |
+          echo "Bundle contents:"
+          ls electron/python_dist/linkedin_helper/ 2>/dev/null | head -20 || dir electron\python_dist\linkedin_helper 2>nul | head -20
+          echo "Playwright browsers:"
+          ls electron/python_dist/playwright_browsers/ 2>/dev/null || dir electron\python_dist\playwright_browsers 2>nul || echo "(none)"
+
+      # ─── Icon + Electron ───────────────────────────────────────────────
       - name: Generate app icon
         run: |
-          cd electron
           pip install Pillow
-          python generate_icon.py || echo "Icon generation failed, will use default"
+          cd electron && python generate_icon.py || echo "Icon generation skipped"
 
       - name: Install Electron dependencies
         working-directory: electron
         run: npm install
 
-      # ─── Build macOS .dmg ──────────────────────────────────────────────
-      - name: Build macOS .dmg
+      # ─── Build installer ───────────────────────────────────────────────
+      - name: Build macOS installer
+        if: matrix.platform == 'mac'
         working-directory: electron
         env:
-          # Skip code signing (no Apple Developer certificate in CI)
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --publish never
 
-      # ─── List build output ─────────────────────────────────────────────
-      - name: List build output
-        run: |
-          echo "Build output:"
-          ls -lh electron/dist/
-          echo ""
-          find electron/dist -name "*.dmg" -o -name "*.zip" | while read f; do
-            echo "  → $f ($(du -sh "$f" | cut -f1))"
-          done
+      - name: Build Windows installer
+        if: matrix.platform == 'win'
+        working-directory: electron
+        run: npx electron-builder --win --publish never
 
-      # ─── Upload .dmg as artifact ───────────────────────────────────────
-      - name: Upload .dmg artifact
+      - name: List build output
+        shell: bash
+        run: ls -lh electron/dist/ 2>/dev/null || true
+
+      # ─── Upload ────────────────────────────────────────────────────────
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: LinkedIn-Helper-macOS-${{ matrix.arch }}
+          name: LinkedIn-Helper-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             electron/dist/*.dmg
             electron/dist/*.zip
+            electron/dist/*.exe
           retention-days: 90
 
-      # ─── Create GitHub Release (only on tag push) ──────────────────────
+      # ─── Release ───────────────────────────────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -227,21 +266,27 @@ jobs:
           name: LinkedIn Helper ${{ github.ref_name }}
           body: |
             ## LinkedIn Helper Desktop App
-            
-            Download the `.dmg` file below and install on macOS:
-            1. Double-click the `.dmg` file
-            2. Drag **LinkedIn Helper** to Applications
-            3. Open from Applications
-            4. If macOS warns about unidentified developer: Right-click → Open → Open
-            
-            ### First-time setup:
-            - Register an account (local, stays on your Mac)
-            - Go to Settings → Login in Browser to authenticate with LinkedIn
-            - Upload a CSV/XLSX with LinkedIn profile URLs
-            - Choose mode and click Start!
+
+            ### macOS
+            Download the `.dmg` for your Mac type:
+            - **Apple Silicon** (M1/M2/M3/M4): `*-arm64.dmg`
+            - **Intel**: `*-x64.dmg`
+
+            Install: Double-click .dmg → drag to Applications → open
+            (If blocked: Right-click → Open → Open)
+
+            ### Windows
+            Download the `.exe` installer and run it.
+
+            ### First-time setup
+            1. Register an account (local to your machine)
+            2. Settings → Login in Browser → log into LinkedIn
+            3. Upload CSV/XLSX with profile URLs
+            4. Choose mode → Start!
           files: |
             electron/dist/*.dmg
             electron/dist/*.zip
+            electron/dist/*.exe
           draft: false
           prerelease: false
         env:

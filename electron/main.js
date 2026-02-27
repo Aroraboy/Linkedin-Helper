@@ -36,24 +36,27 @@ function getResourcesPath() {
  */
 function getPythonCommand() {
   if (isPacked) {
-    const exePath = path.join(
-      process.resourcesPath,
-      "python_app",
-      "linkedin_helper"
-    );
+    // On Windows: linkedin_helper.exe, on macOS/Linux: linkedin_helper
+    const exeName =
+      process.platform === "win32" ? "linkedin_helper.exe" : "linkedin_helper";
+
+    // Try: Resources/python_app/linkedin_helper(.exe)
+    const exePath = path.join(process.resourcesPath, "python_app", exeName);
     if (fs.existsSync(exePath)) return { exe: exePath, args: [] };
-    // Fallback — maybe named with extension or in different folder
+
+    // Fallback: Resources/python_app/linkedin_helper/linkedin_helper(.exe)
     const exePathAlt = path.join(
       process.resourcesPath,
       "python_app",
       "linkedin_helper",
-      "linkedin_helper"
+      exeName
     );
     if (fs.existsSync(exePathAlt)) return { exe: exePathAlt, args: [] };
   }
-  // Dev mode
+  // Dev mode — use python3 on macOS/Linux, python on Windows
+  const pythonExe = process.platform === "win32" ? "python" : "python3";
   return {
-    exe: "python3",
+    exe: pythonExe,
     args: [path.join(__dirname, "..", "app.py")],
   };
 }
@@ -237,14 +240,25 @@ function createWindow() {
 function killPythonServer() {
   if (pythonProcess) {
     console.log("[Electron] Shutting down Python server...");
-    pythonProcess.kill("SIGTERM");
-    // Force kill after 5 seconds if it hasn't stopped
-    setTimeout(() => {
-      if (pythonProcess) {
-        console.log("[Electron] Force-killing Python server...");
-        pythonProcess.kill("SIGKILL");
+    if (process.platform === "win32") {
+      // Windows: use taskkill to kill the process tree
+      const { execSync } = require("child_process");
+      try {
+        execSync(`taskkill /pid ${pythonProcess.pid} /T /F`, {
+          stdio: "ignore",
+        });
+      } catch (e) {
+        // Process may have already exited
       }
-    }, 5000);
+    } else {
+      pythonProcess.kill("SIGTERM");
+      setTimeout(() => {
+        if (pythonProcess) {
+          console.log("[Electron] Force-killing Python server...");
+          pythonProcess.kill("SIGKILL");
+        }
+      }, 5000);
+    }
   }
 }
 
