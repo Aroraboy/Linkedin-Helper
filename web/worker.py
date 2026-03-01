@@ -125,6 +125,7 @@ def _run_job(app, job_id: int, headless: bool = False):
                         elif result in ("already_connected", "already_pending", "skipped"):
                             job.skipped += 1
                         else:
+                            profile.error_msg = f"Connection request failed: {result}"
                             job.errors += 1
 
                     if job.mode == "message":
@@ -134,7 +135,11 @@ def _run_job(app, job_id: int, headless: bool = False):
                         if msg_result == "messaged":
                             job.sent += 1
                         elif msg_result == "error":
+                            profile.error_msg = "Failed to send message (selector or UI issue)"
                             job.errors += 1
+                        elif msg_result == "not_connected":
+                            profile.error_msg = "Not connected — can only message 1st connections"
+                            job.skipped += 1
                         else:
                             job.skipped += 1
 

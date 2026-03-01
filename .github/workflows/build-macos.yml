@@ -268,9 +268,21 @@ jobs:
             electron/dist/*.exe
           retention-days: 90
 
-      # ─── Release ───────────────────────────────────────────────────────
+  # ─── Release (runs once after all builds complete) ─────────────────
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded files
+        run: find artifacts -type f | head -30
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: LinkedIn Helper ${{ github.ref_name }}
@@ -294,9 +306,9 @@ jobs:
             3. Upload CSV/XLSX with profile URLs
             4. Choose mode → Start!
           files: |
-            electron/dist/*.dmg
-            electron/dist/*.zip
-            electron/dist/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            artifacts/**/*.exe
           draft: false
           prerelease: false
           fail_on_unmatched_files: false

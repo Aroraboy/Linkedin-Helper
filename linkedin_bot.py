@@ -1340,49 +1340,124 @@ class LinkedInBot:
         try:
             page = self.page
 
-            # Step 2: Click Message button using Codegen selector
-            # Pattern: "Message {first_name}"
-            message_btn = page.get_by_role("button", name=f"Message {first_name}")
+            # Step 2: Click Message button — try multiple selector strategies
+            message_clicked = False
+
+            # Strategy 1: Codegen pattern "Message {first_name}"
             try:
-                if not message_btn.is_visible(timeout=3000):
-                    print(f"[BOT]   No 'Message {first_name}' button found — not connected")
-                    return "not_connected"
+                message_btn = page.get_by_role("button", name=f"Message {first_name}")
+                if message_btn.is_visible(timeout=3000):
+                    print(f"[BOT]   Clicking 'Message {first_name}'")
+                    message_btn.click()
+                    message_clicked = True
             except Exception:
-                print(f"[BOT]   No 'Message {first_name}' button found — not connected")
+                pass
+
+            # Strategy 2: Just "Message" button on profile
+            if not message_clicked:
+                try:
+                    message_btn = page.get_by_role("button", name="Message", exact=True)
+                    if message_btn.is_visible(timeout=2000):
+                        print(f"[BOT]   Clicking 'Message' button")
+                        message_btn.click()
+                        message_clicked = True
+                except Exception:
+                    pass
+
+            # Strategy 3: CSS selector fallbacks
+            if not message_clicked:
+                css_selectors = [
+                    'button[aria-label*="Message"]',
+                    '.pv-top-card button:has-text("Message")',
+                    '.pvs-profile-actions button:has-text("Message")',
+                    'button.artdeco-button:has-text("Message")',
+                    'a[href*="messaging"]',
+                ]
+                for sel in css_selectors:
+                    try:
+                        btn = page.query_selector(sel)
+                        if btn and btn.is_visible():
+                            text = btn.inner_text().strip()
+                            print(f"[BOT]   Clicking fallback message button: '{text}'")
+                            btn.click()
+                            message_clicked = True
+                            break
+                    except Exception:
+                        continue
+
+            if not message_clicked:
+                print(f"[BOT]   No Message button found — not connected or restricted profile")
                 return "not_connected"
 
-            print(f"[BOT]   Clicking 'Message {first_name}'")
-            message_btn.click()
             self._random_delay((2, 4))
 
-            # Step 3: Fill the message textbox
+            # Step 3: Fill the message textbox — try multiple selectors
             personalized_msg = message_template.format(first_name=first_name)
-            try:
-                textbox = page.get_by_role("textbox", name="Write a message\u2026")
-                textbox.click()
-                self._random_delay((0.5, 1))
-                textbox.fill(personalized_msg)
-                print(f"[BOT]   Typed message ({len(personalized_msg)} chars)")
-                self._random_delay((1, 2))
-            except Exception as e:
-                print(f"[BOT]   Could not fill message textbox: {e}")
+            textbox_filled = False
+
+            # Textbox selector strategies
+            textbox_strategies = [
+                lambda: page.get_by_role("textbox", name="Write a message\u2026"),
+                lambda: page.get_by_role("textbox", name="Write a message..."),
+                lambda: page.get_by_role("textbox", name="Write a message"),
+                lambda: page.get_by_placeholder("Write a message\u2026"),
+                lambda: page.get_by_placeholder("Write a message"),
+                lambda: page.locator('div[role="textbox"]'),
+                lambda: page.locator('.msg-form__contenteditable'),
+                lambda: page.locator('div.msg-form__msg-content-container div[contenteditable="true"]'),
+            ]
+
+            for get_textbox in textbox_strategies:
+                try:
+                    textbox = get_textbox()
+                    if textbox.is_visible(timeout=2000):
+                        textbox.click()
+                        self._random_delay((0.5, 1))
+                        textbox.fill(personalized_msg)
+                        print(f"[BOT]   Typed message ({len(personalized_msg)} chars)")
+                        self._random_delay((1, 2))
+                        textbox_filled = True
+                        break
+                except Exception:
+                    continue
+
+            if not textbox_filled:
+                print(f"[BOT]   Could not fill message textbox — no matching input found")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
-            # Step 4: Click Send
-            try:
-                send_btn = page.get_by_role("button", name="Send", exact=True)
-                send_btn.click()
-                print(f"[BOT]   Clicked 'Send'")
-                self._random_delay((1, 3))
-            except Exception as e:
-                print(f"[BOT]   Could not click Send button: {e}")
+            # Step 4: Click Send — try multiple selectors
+            send_clicked = False
+
+            send_strategies = [
+                lambda: page.get_by_role("button", name="Send", exact=True),
+                lambda: page.locator('button[type="submit"].msg-form__send-button'),
+                lambda: page.locator('button.msg-form__send-button'),
+                lambda: page.get_by_role("button", name="Send message"),
+                lambda: page.locator('button[aria-label="Send"]'),
+                lambda: page.locator('button:has-text("Send")').first,
+            ]
+
+            for get_send in send_strategies:
+                try:
+                    send_btn = get_send()
+                    if send_btn.is_visible(timeout=2000):
+                        send_btn.click()
+                        print(f"[BOT]   Clicked 'Send'")
+                        self._random_delay((1, 3))
+                        send_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not send_clicked:
+                print(f"[BOT]   Could not click Send button — no matching button found")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
             # Step 5: Close the chat
             self._close_chat_modal(first_name)
-            print(f"[BOT]   ✓ Follow-up message sent!")
+            print(f"[BOT]   \u2713 Follow-up message sent!")
             return STATUS_MESSAGED
 
         except Exception as e:
