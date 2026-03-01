@@ -13,10 +13,25 @@ Handles:
 import json
 import random
 import time
+import logging
 from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+
+# Set up file logging for bot operations
+_log_path = Path(__file__).resolve().parent / "bot_debug.log"
+_bot_logger = logging.getLogger("linkedin_bot")
+_bot_logger.setLevel(logging.DEBUG)
+_fh = logging.FileHandler(str(_log_path), mode="a", encoding="utf-8")
+_fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+_bot_logger.addHandler(_fh)
+
+
+def _log(msg: str):
+    """Print and log to file."""
+    print(msg)
+    _bot_logger.info(msg)
 
 from config import (
     DELAY_BETWEEN_ACTIONS,
@@ -1301,70 +1316,60 @@ class LinkedInBot:
         """
         Visit a profile and send a follow-up message if connected.
 
-        Uses Codegen-proven selectors:
-            1. get_by_role("button", name="Message {first_name}").click()
-            2. get_by_role("textbox", name="Write a message…").fill(msg)
-            3. get_by_role("button", name="Send", exact=True).click()
-            4. get_by_role("button", name="Close your conversation with").click()
-
-        Args:
-            url: LinkedIn profile URL.
-            message_template: Message with {first_name} placeholder.
-                             If None, loads from templates/followup_message.txt.
-
         Returns:
             Status string: "messaged", "not_connected", "skipped", "error"
         """
         if message_template is None:
             message_template = get_followup_message_template()
 
+        _log(f"[BOT] === send_followup_message START === url={url}")
+
         try:
             # Step 1: Visit the profile
             profile_info = self.visit_profile(url)
             first_name = profile_info["first_name"]
             full_name = profile_info["name"]
-            print(f"[BOT]   Name: {full_name}")
+            _log(f"[BOT]   Step 1 OK — Name: {full_name}")
 
         except ProfileNotFoundError:
-            print(f"[BOT]   Profile not found (404)")
+            _log(f"[BOT]   Step 1 FAIL — Profile not found (404)")
             return STATUS_ERROR
 
         except SessionExpiredError:
-            print(f"[BOT]   Session expired! Need to re-login.")
+            _log(f"[BOT]   Step 1 FAIL — Session expired")
             return STATUS_ERROR
 
         except Exception as e:
-            print(f"[BOT]   Error visiting profile: {e}")
+            _log(f"[BOT]   Step 1 FAIL — Error visiting profile: {e}")
             return STATUS_ERROR
 
         try:
             page = self.page
 
-            # Step 2: Click Message button — try multiple selector strategies
+            # Step 2: Click Message button
             message_clicked = False
 
-            # Strategy 1: Codegen pattern "Message {first_name}"
             try:
                 message_btn = page.get_by_role("button", name=f"Message {first_name}")
                 if message_btn.is_visible(timeout=3000):
-                    print(f"[BOT]   Clicking 'Message {first_name}'")
+                    _log(f"[BOT]   Step 2 — Clicking 'Message {first_name}'")
                     message_btn.click()
                     message_clicked = True
-            except Exception:
-                pass
+                    _log(f"[BOT]   Step 2 OK — Message button clicked (strategy 1)")
+            except Exception as e:
+                _log(f"[BOT]   Step 2 strategy 1 failed: {e}")
 
-            # Strategy 2: Just "Message" button on profile
             if not message_clicked:
                 try:
                     message_btn = page.get_by_role("button", name="Message", exact=True)
                     if message_btn.is_visible(timeout=2000):
-                        print(f"[BOT]   Clicking 'Message' button")
+                        _log(f"[BOT]   Step 2 — Clicking 'Message' button")
                         message_btn.click()
                         message_clicked = True
-                except Exception:
-                    pass
+                        _log(f"[BOT]   Step 2 OK — Message button clicked (strategy 2)")
+                except Exception as e:
+                    _log(f"[BOT]   Step 2 strategy 2 failed: {e}")
 
-            # Strategy 3: CSS selector fallbacks
             if not message_clicked:
                 css_selectors = [
                     'button[aria-label*="Message"]',
@@ -1378,21 +1383,21 @@ class LinkedInBot:
                         btn = page.query_selector(sel)
                         if btn and btn.is_visible():
                             text = btn.inner_text().strip()
-                            print(f"[BOT]   Clicking fallback message button: '{text}'")
+                            _log(f"[BOT]   Step 2 — Clicking fallback: '{text}' via {sel}")
                             btn.click()
                             message_clicked = True
+                            _log(f"[BOT]   Step 2 OK — Message button clicked (CSS fallback)")
                             break
                     except Exception:
                         continue
 
             if not message_clicked:
-                print(f"[BOT]   No Message button found — not connected or restricted profile")
+                _log(f"[BOT]   Step 2 FAIL — No Message button found")
                 return "not_connected"
 
             self._random_delay((2, 4))
 
-            # Step 3: Wait for messaging panel to appear
-            # LinkedIn opens a chat overlay — wait for any input area
+            # Step 3: Wait for messaging panel
             panel_ready = False
             try:
                 page.wait_for_selector(
@@ -1401,21 +1406,18 @@ class LinkedInBot:
                     timeout=5000,
                 )
                 panel_ready = True
-            except Exception:
-                print("[BOT]   Messaging panel didn't open")
+                _log(f"[BOT]   Step 3 OK — Messaging panel opened")
+            except Exception as e:
+                _log(f"[BOT]   Step 3 FAIL — Messaging panel didn't open: {e}")
 
             if not panel_ready:
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
-            # Step 4: Type the message using keyboard (most reliable method)
-            # LinkedIn's contenteditable divs often break fill() due to
-            # React re-renders causing stale element references. Keyboard
-            # typing is the most reliable approach.
+            # Step 4: Type the message
             personalized_msg = message_template.format(first_name=first_name)
             text_entered = False
 
-            # Method 1: Click the textbox and type via keyboard
             textbox_selectors = [
                 'div[role="textbox"]',
                 '.msg-form__contenteditable',
@@ -1426,33 +1428,36 @@ class LinkedInBot:
             for sel in textbox_selectors:
                 try:
                     tb = page.locator(sel).first
+                    _log(f"[BOT]   Step 4 — Trying textbox selector: {sel}")
                     if tb.is_visible(timeout=2000):
+                        _log(f"[BOT]   Step 4 — Textbox visible, clicking...")
                         tb.click()
                         self._random_delay((0.3, 0.5))
-                        # Clear any existing text (works on both Win/Mac)
                         import platform
                         select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
                         page.keyboard.press(select_all)
                         page.keyboard.press("Backspace")
                         self._random_delay((0.2, 0.4))
-                        # Type via keyboard — guaranteed to trigger React events
+                        _log(f"[BOT]   Step 4 — Typing {len(personalized_msg)} chars via keyboard...")
                         page.keyboard.type(personalized_msg, delay=5)
-                        print(f"[BOT]   Typed message via keyboard ({len(personalized_msg)} chars)")
+                        _log(f"[BOT]   Step 4 OK — Message typed via keyboard")
                         self._random_delay((1, 2))
                         text_entered = True
                         break
+                    else:
+                        _log(f"[BOT]   Step 4 — Textbox not visible for selector: {sel}")
                 except Exception as e:
-                    print(f"[BOT]   Textbox selector '{sel}' failed: {e}")
+                    _log(f"[BOT]   Step 4 — Textbox selector '{sel}' exception: {type(e).__name__}: {e}")
                     continue
 
-            # Method 2: Try fill() as fallback
             if not text_entered:
+                _log(f"[BOT]   Step 4 — Trying fill() fallbacks...")
                 fill_strategies = [
-                    lambda: page.get_by_role("textbox", name="Write a message\u2026"),
-                    lambda: page.get_by_role("textbox", name="Write a message"),
-                    lambda: page.get_by_placeholder("Write a message"),
+                    ("role:Write a message\u2026", lambda: page.get_by_role("textbox", name="Write a message\u2026")),
+                    ("role:Write a message", lambda: page.get_by_role("textbox", name="Write a message")),
+                    ("placeholder:Write a message", lambda: page.get_by_placeholder("Write a message")),
                 ]
-                for get_tb in fill_strategies:
+                for name, get_tb in fill_strategies:
                     try:
                         tb = get_tb()
                         if tb.is_visible(timeout=1000):
@@ -1460,25 +1465,22 @@ class LinkedInBot:
                             self._random_delay((0.3, 0.5))
                             try:
                                 tb.fill(personalized_msg)
-                            except Exception:
-                                # fill() may throw after inserting text — that's OK
-                                pass
-                            print(f"[BOT]   Filled message via fill() ({len(personalized_msg)} chars)")
+                            except Exception as fe:
+                                _log(f"[BOT]   Step 4 — fill() threw (may still have worked): {fe}")
+                            _log(f"[BOT]   Step 4 OK — Filled via {name}")
                             self._random_delay((1, 2))
                             text_entered = True
                             break
-                    except Exception:
+                    except Exception as e:
+                        _log(f"[BOT]   Step 4 — fill strategy '{name}' failed: {e}")
                         continue
 
             if not text_entered:
-                print(f"[BOT]   Could not enter message text")
+                _log(f"[BOT]   Step 4 FAIL — Could not enter message text")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
             # Step 5: Click Send
-            # IMPORTANT: After clicking Send, LinkedIn's DOM updates rapidly.
-            # The click may succeed but throw a post-click exception as the
-            # button detaches. We handle this gracefully.
             send_clicked = False
 
             send_selectors = [
@@ -1486,67 +1488,75 @@ class LinkedInBot:
                 'button[type="submit"].msg-form__send-button',
             ]
 
-            # First try CSS selectors (most reliable for LinkedIn messaging)
             for sel in send_selectors:
                 try:
                     btn = page.locator(sel).first
+                    _log(f"[BOT]   Step 5 — Trying send CSS: {sel}")
                     if btn.is_visible(timeout=2000):
+                        _log(f"[BOT]   Step 5 — Send button visible, clicking...")
                         try:
                             btn.click()
-                        except Exception:
-                            pass  # Click went through, DOM just changed
-                        print(f"[BOT]   Clicked Send (CSS: {sel})")
+                        except Exception as ce:
+                            _log(f"[BOT]   Step 5 — click() threw (post-click DOM change): {ce}")
+                        _log(f"[BOT]   Step 5 OK — Send clicked (CSS: {sel})")
                         send_clicked = True
                         self._random_delay((1, 3))
                         break
-                except Exception:
+                    else:
+                        _log(f"[BOT]   Step 5 — Send button not visible for: {sel}")
+                except Exception as e:
+                    _log(f"[BOT]   Step 5 — CSS selector '{sel}' exception: {type(e).__name__}: {e}")
                     continue
 
-            # Then try role-based selectors
             if not send_clicked:
                 role_strategies = [
-                    lambda: page.get_by_role("button", name="Send", exact=True),
-                    lambda: page.get_by_role("button", name="Send message"),
-                    lambda: page.locator('button[aria-label="Send"]'),
+                    ("Send exact", lambda: page.get_by_role("button", name="Send", exact=True)),
+                    ("Send message", lambda: page.get_by_role("button", name="Send message")),
+                    ("aria-label Send", lambda: page.locator('button[aria-label="Send"]')),
                 ]
-                for get_btn in role_strategies:
+                for name, get_btn in role_strategies:
                     try:
                         btn = get_btn()
+                        _log(f"[BOT]   Step 5 — Trying role: {name}")
                         if btn.is_visible(timeout=1000):
+                            _log(f"[BOT]   Step 5 — Role button visible, clicking...")
                             try:
                                 btn.click()
-                            except Exception:
-                                pass
-                            print(f"[BOT]   Clicked Send (role-based)")
+                            except Exception as ce:
+                                _log(f"[BOT]   Step 5 — click() threw: {ce}")
+                            _log(f"[BOT]   Step 5 OK — Send clicked ({name})")
                             send_clicked = True
                             self._random_delay((1, 3))
                             break
-                    except Exception:
+                        else:
+                            _log(f"[BOT]   Step 5 — Not visible: {name}")
+                    except Exception as e:
+                        _log(f"[BOT]   Step 5 — Role '{name}' failed: {e}")
                         continue
 
-            # Last resort: press Enter to send
             if not send_clicked:
                 try:
                     page.keyboard.press("Enter")
-                    print(f"[BOT]   Pressed Enter to send")
+                    _log(f"[BOT]   Step 5 OK — Pressed Enter to send")
                     send_clicked = True
                     self._random_delay((1, 3))
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"[BOT]   Step 5 — Enter key failed: {e}")
 
             if not send_clicked:
-                print(f"[BOT]   Could not find Send button")
+                _log(f"[BOT]   Step 5 FAIL — Could not find Send button")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
-            # Step 6: Close the chat
+            # Step 6: Close chat
             self._close_chat_modal(first_name)
-            print(f"[BOT]   \u2713 Follow-up message sent!")
-            return STATUS_MESSAGED
+            _log(f"[BOT]   === RESULT: messaged ===")
             return STATUS_MESSAGED
 
         except Exception as e:
-            print(f"[BOT]   Error sending message: {e}")
+            _log(f"[BOT]   === RESULT: error (outer exception) === {type(e).__name__}: {e}")
+            import traceback
+            _log(f"[BOT]   Traceback: {traceback.format_exc()}")
             self._close_chat_modal(first_name)
             return STATUS_ERROR
 

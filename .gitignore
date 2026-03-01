@@ -10,6 +10,9 @@ state.json
 *.db-wal
 instance/
 
+# Debug logs
+bot_debug.log
+
 # Python
 __pycache__/
 *.py[cod]
