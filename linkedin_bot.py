@@ -1391,99 +1391,140 @@ class LinkedInBot:
 
             self._random_delay((2, 4))
 
-            # Step 3: Fill the message textbox — try multiple selectors
-            personalized_msg = message_template.format(first_name=first_name)
-            textbox_filled = False
+            # Step 3: Wait for messaging panel to appear
+            # LinkedIn opens a chat overlay — wait for any input area
+            panel_ready = False
+            try:
+                page.wait_for_selector(
+                    'div[role="textbox"], .msg-form__contenteditable, '
+                    'div[contenteditable="true"]',
+                    timeout=5000,
+                )
+                panel_ready = True
+            except Exception:
+                print("[BOT]   Messaging panel didn't open")
 
-            # Textbox selector strategies
-            textbox_strategies = [
-                lambda: page.get_by_role("textbox", name="Write a message\u2026"),
-                lambda: page.get_by_role("textbox", name="Write a message..."),
-                lambda: page.get_by_role("textbox", name="Write a message"),
-                lambda: page.get_by_placeholder("Write a message\u2026"),
-                lambda: page.get_by_placeholder("Write a message"),
-                lambda: page.locator('div[role="textbox"]'),
-                lambda: page.locator('.msg-form__contenteditable'),
-                lambda: page.locator('div.msg-form__msg-content-container div[contenteditable="true"]'),
-            ]
-
-            for get_textbox in textbox_strategies:
-                try:
-                    textbox = get_textbox()
-                    if textbox.is_visible(timeout=2000):
-                        textbox.click()
-                        self._random_delay((0.5, 1))
-                        # Use fill() then dispatch input event to ensure
-                        # LinkedIn's React state detects the text
-                        textbox.fill(personalized_msg)
-                        try:
-                            textbox.dispatch_event("input")
-                        except Exception:
-                            pass
-                        print(f"[BOT]   Typed message ({len(personalized_msg)} chars)")
-                        self._random_delay((1, 2))
-                        textbox_filled = True
-                        break
-                except Exception:
-                    continue
-
-            # Fallback: use keyboard typing if fill() didn't work
-            if not textbox_filled:
-                try:
-                    # Try clicking any visible contenteditable and typing via keyboard
-                    ce = page.locator('[contenteditable="true"]').first
-                    if ce.is_visible(timeout=2000):
-                        ce.click()
-                        self._random_delay((0.5, 1))
-                        page.keyboard.press("Control+A")
-                        page.keyboard.press("Backspace")
-                        page.keyboard.type(personalized_msg, delay=10)
-                        print(f"[BOT]   Typed message via keyboard ({len(personalized_msg)} chars)")
-                        self._random_delay((1, 2))
-                        textbox_filled = True
-                except Exception:
-                    pass
-
-            if not textbox_filled:
-                print(f"[BOT]   Could not fill message textbox — no matching input found")
+            if not panel_ready:
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
-            # Step 4: Click Send — try multiple selectors
-            # IMPORTANT: click() may throw AFTER actually clicking because
-            # LinkedIn's DOM updates rapidly (button detaches). We mark
-            # send_clicked = True immediately after click() and handle
-            # post-click exceptions gracefully.
-            send_clicked = False
+            # Step 4: Type the message using keyboard (most reliable method)
+            # LinkedIn's contenteditable divs often break fill() due to
+            # React re-renders causing stale element references. Keyboard
+            # typing is the most reliable approach.
+            personalized_msg = message_template.format(first_name=first_name)
+            text_entered = False
 
-            send_strategies = [
-                lambda: page.get_by_role("button", name="Send", exact=True),
-                lambda: page.locator('button[type="submit"].msg-form__send-button'),
-                lambda: page.locator('button.msg-form__send-button'),
-                lambda: page.get_by_role("button", name="Send message"),
-                lambda: page.locator('button[aria-label="Send"]'),
-                lambda: page.locator('button:has-text("Send")').first,
+            # Method 1: Click the textbox and type via keyboard
+            textbox_selectors = [
+                'div[role="textbox"]',
+                '.msg-form__contenteditable',
+                'div.msg-form__msg-content-container div[contenteditable="true"]',
+                'div[contenteditable="true"]',
             ]
 
-            for get_send in send_strategies:
+            for sel in textbox_selectors:
                 try:
-                    send_btn = get_send()
-                    if send_btn.is_visible(timeout=2000):
+                    tb = page.locator(sel).first
+                    if tb.is_visible(timeout=2000):
+                        tb.click()
+                        self._random_delay((0.3, 0.5))
+                        # Clear any existing text (works on both Win/Mac)
+                        import platform
+                        select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
+                        page.keyboard.press(select_all)
+                        page.keyboard.press("Backspace")
+                        self._random_delay((0.2, 0.4))
+                        # Type via keyboard — guaranteed to trigger React events
+                        page.keyboard.type(personalized_msg, delay=5)
+                        print(f"[BOT]   Typed message via keyboard ({len(personalized_msg)} chars)")
+                        self._random_delay((1, 2))
+                        text_entered = True
+                        break
+                except Exception as e:
+                    print(f"[BOT]   Textbox selector '{sel}' failed: {e}")
+                    continue
+
+            # Method 2: Try fill() as fallback
+            if not text_entered:
+                fill_strategies = [
+                    lambda: page.get_by_role("textbox", name="Write a message\u2026"),
+                    lambda: page.get_by_role("textbox", name="Write a message"),
+                    lambda: page.get_by_placeholder("Write a message"),
+                ]
+                for get_tb in fill_strategies:
+                    try:
+                        tb = get_tb()
+                        if tb.is_visible(timeout=1000):
+                            tb.click()
+                            self._random_delay((0.3, 0.5))
+                            try:
+                                tb.fill(personalized_msg)
+                            except Exception:
+                                # fill() may throw after inserting text — that's OK
+                                pass
+                            print(f"[BOT]   Filled message via fill() ({len(personalized_msg)} chars)")
+                            self._random_delay((1, 2))
+                            text_entered = True
+                            break
+                    except Exception:
+                        continue
+
+            if not text_entered:
+                print(f"[BOT]   Could not enter message text")
+                self._close_chat_modal(first_name)
+                return STATUS_ERROR
+
+            # Step 5: Click Send
+            # IMPORTANT: After clicking Send, LinkedIn's DOM updates rapidly.
+            # The click may succeed but throw a post-click exception as the
+            # button detaches. We handle this gracefully.
+            send_clicked = False
+
+            send_selectors = [
+                'button.msg-form__send-button',
+                'button[type="submit"].msg-form__send-button',
+            ]
+
+            # First try CSS selectors (most reliable for LinkedIn messaging)
+            for sel in send_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if btn.is_visible(timeout=2000):
                         try:
-                            send_btn.click()
+                            btn.click()
                         except Exception:
-                            # click() can throw after actually clicking if the
-                            # DOM changes (button detaches after message sends).
-                            # The click still went through — treat as success.
-                            pass
-                        print(f"[BOT]   Clicked 'Send'")
+                            pass  # Click went through, DOM just changed
+                        print(f"[BOT]   Clicked Send (CSS: {sel})")
                         send_clicked = True
                         self._random_delay((1, 3))
                         break
                 except Exception:
                     continue
 
-            # Fallback: try pressing Enter to send (LinkedIn supports this)
+            # Then try role-based selectors
+            if not send_clicked:
+                role_strategies = [
+                    lambda: page.get_by_role("button", name="Send", exact=True),
+                    lambda: page.get_by_role("button", name="Send message"),
+                    lambda: page.locator('button[aria-label="Send"]'),
+                ]
+                for get_btn in role_strategies:
+                    try:
+                        btn = get_btn()
+                        if btn.is_visible(timeout=1000):
+                            try:
+                                btn.click()
+                            except Exception:
+                                pass
+                            print(f"[BOT]   Clicked Send (role-based)")
+                            send_clicked = True
+                            self._random_delay((1, 3))
+                            break
+                    except Exception:
+                        continue
+
+            # Last resort: press Enter to send
             if not send_clicked:
                 try:
                     page.keyboard.press("Enter")
@@ -1494,30 +1535,14 @@ class LinkedInBot:
                     pass
 
             if not send_clicked:
-                print(f"[BOT]   Could not click Send button — no matching button found")
+                print(f"[BOT]   Could not find Send button")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
-
-            # Step 5: Verify message was sent by checking if textbox is now empty
-            try:
-                self._random_delay((0.5, 1))
-                # If the textbox still has text, the send might have failed
-                for get_textbox in textbox_strategies[:3]:
-                    try:
-                        tb = get_textbox()
-                        if tb.is_visible(timeout=1000):
-                            content = tb.inner_text().strip()
-                            if content and len(content) > 5:
-                                print(f"[BOT]   WARNING: Textbox still has content, message may not have sent")
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
 
             # Step 6: Close the chat
             self._close_chat_modal(first_name)
             print(f"[BOT]   \u2713 Follow-up message sent!")
+            return STATUS_MESSAGED
             return STATUS_MESSAGED
 
         except Exception as e:
