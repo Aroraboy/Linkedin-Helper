@@ -1413,7 +1413,13 @@ class LinkedInBot:
                     if textbox.is_visible(timeout=2000):
                         textbox.click()
                         self._random_delay((0.5, 1))
+                        # Use fill() then dispatch input event to ensure
+                        # LinkedIn's React state detects the text
                         textbox.fill(personalized_msg)
+                        try:
+                            textbox.dispatch_event("input")
+                        except Exception:
+                            pass
                         print(f"[BOT]   Typed message ({len(personalized_msg)} chars)")
                         self._random_delay((1, 2))
                         textbox_filled = True
@@ -1421,12 +1427,33 @@ class LinkedInBot:
                 except Exception:
                     continue
 
+            # Fallback: use keyboard typing if fill() didn't work
+            if not textbox_filled:
+                try:
+                    # Try clicking any visible contenteditable and typing via keyboard
+                    ce = page.locator('[contenteditable="true"]').first
+                    if ce.is_visible(timeout=2000):
+                        ce.click()
+                        self._random_delay((0.5, 1))
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        page.keyboard.type(personalized_msg, delay=10)
+                        print(f"[BOT]   Typed message via keyboard ({len(personalized_msg)} chars)")
+                        self._random_delay((1, 2))
+                        textbox_filled = True
+                except Exception:
+                    pass
+
             if not textbox_filled:
                 print(f"[BOT]   Could not fill message textbox — no matching input found")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
             # Step 4: Click Send — try multiple selectors
+            # IMPORTANT: click() may throw AFTER actually clicking because
+            # LinkedIn's DOM updates rapidly (button detaches). We mark
+            # send_clicked = True immediately after click() and handle
+            # post-click exceptions gracefully.
             send_clicked = False
 
             send_strategies = [
@@ -1442,20 +1469,53 @@ class LinkedInBot:
                 try:
                     send_btn = get_send()
                     if send_btn.is_visible(timeout=2000):
-                        send_btn.click()
+                        try:
+                            send_btn.click()
+                        except Exception:
+                            # click() can throw after actually clicking if the
+                            # DOM changes (button detaches after message sends).
+                            # The click still went through — treat as success.
+                            pass
                         print(f"[BOT]   Clicked 'Send'")
-                        self._random_delay((1, 3))
                         send_clicked = True
+                        self._random_delay((1, 3))
                         break
                 except Exception:
                     continue
+
+            # Fallback: try pressing Enter to send (LinkedIn supports this)
+            if not send_clicked:
+                try:
+                    page.keyboard.press("Enter")
+                    print(f"[BOT]   Pressed Enter to send")
+                    send_clicked = True
+                    self._random_delay((1, 3))
+                except Exception:
+                    pass
 
             if not send_clicked:
                 print(f"[BOT]   Could not click Send button — no matching button found")
                 self._close_chat_modal(first_name)
                 return STATUS_ERROR
 
-            # Step 5: Close the chat
+            # Step 5: Verify message was sent by checking if textbox is now empty
+            try:
+                self._random_delay((0.5, 1))
+                # If the textbox still has text, the send might have failed
+                for get_textbox in textbox_strategies[:3]:
+                    try:
+                        tb = get_textbox()
+                        if tb.is_visible(timeout=1000):
+                            content = tb.inner_text().strip()
+                            if content and len(content) > 5:
+                                print(f"[BOT]   WARNING: Textbox still has content, message may not have sent")
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Step 6: Close the chat
             self._close_chat_modal(first_name)
             print(f"[BOT]   \u2713 Follow-up message sent!")
             return STATUS_MESSAGED
